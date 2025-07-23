@@ -277,10 +277,17 @@ function App() {
                       {/* Protected routes - require authentication */}
                       <Route path="/main" element={
                         <ProtectedRoute>
-                          <MainSection 
-                            setBackgroundSkybox={setBackgroundSkybox}
-                            className="w-full px-6"
-                          />
+                          <div className="min-h-screen bg-gray-900 p-4">
+                            <div className="max-w-4xl mx-auto">
+                              <PromptPanel 
+                                onAssetsGenerated={(jobId) => {
+                                  // Navigate to preview after successful generation
+                                  window.location.href = `/preview/${jobId}`;
+                                }}
+                                className="w-full"
+                              />
+                            </div>
+                          </div>
                         </ProtectedRoute>
                       } />
                       <Route path="/explore" element={

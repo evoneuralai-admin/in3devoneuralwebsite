@@ -22,12 +22,15 @@ export const skyboxApiService = {
   },
 
   // Generate a new skybox
-  async generateSkybox({ prompt, style_id, negative_prompt, userId }: { prompt: string; style_id: string|number; negative_prompt?: string; userId?: string }) {
+  async generateSkybox({ prompt, style_id, negative_prompt = "", userId }: { prompt: string; style_id: string|number; negative_prompt?: string; userId?: string }) {
+    if (!prompt || !style_id) {
+      throw new Error("Missing required fields: prompt and style_id");
+    }
     try {
       const response = await api.post('/skybox/generate', { 
         prompt, 
         skybox_style_id: style_id, // <-- FIXED: use correct field name
-        negative_text: negative_prompt, 
+        negative_text: negative_prompt || "", 
         userId 
       });
       return response.data;
