@@ -1,39 +1,54 @@
 import { Request, Response } from 'express';
-import { skyboxService, SkyboxGenerationRequest, ApiResponse } from '../services/skyboxService';
+import { skyboxService } from '../services/skyboxService';
+import type { SkyboxGenerationRequest, SkyboxStyle, ApiResponse } from '../types/skybox';
 
-/**
- * Get skybox styles with pagination
- * GET /api/skybox/styles
- */
-export const getSkyboxStyles = async (req: Request, res: Response) => {
+// Get all skybox styles
+export const getStyles = async (req: Request, res: Response) => {
+  console.log('🎨 [DEBUG] Backend getStyles called with query:', req.query);
+  
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
 
-    console.log(`Skybox API: GET /styles - page: ${page}, limit: ${limit}`);
+    console.log('🎨 [DEBUG] Parsed parameters:', { page, limit });
+    console.log('🎨 [DEBUG] Calling skyboxService.getStyles...');
 
-    const result = await skyboxService.getSkyboxStyles(page, limit);
+    const startTime = Date.now();
+    const styles = await skyboxService.getStyles(page, limit);
+    const duration = Date.now() - startTime;
 
-    const response: ApiResponse<{ styles: any[] }> = {
+    console.log('🎨 [DEBUG] skyboxService.getStyles completed in', duration + 'ms');
+    console.log('🎨 [DEBUG] Retrieved', styles.length, 'styles');
+
+    const response: ApiResponse<{ styles: SkyboxStyle[]; pagination: any }> = {
       success: true,
       data: {
-        styles: result.styles
+        styles,
+        pagination: {
+          page,
+          limit,
+          total: styles.length,
+          totalPages: Math.ceil(styles.length / limit),
+          hasNext: styles.length === limit,
+          hasPrev: page > 1
+        }
       },
-      message: `Retrieved ${result.styles.length} skybox styles`,
-      pagination: result.pagination
+      message: `Retrieved ${styles.length} skybox styles`
     };
 
+    console.log('🎨 [DEBUG] Sending response with', styles.length, 'styles');
     res.status(200).json(response);
   } catch (error) {
-    console.error('Skybox API Error - getSkyboxStyles:', error);
+    console.error('❌ [DEBUG] getStyles error:', error);
+    console.error('❌ [DEBUG] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     
     const response: ApiResponse<null> = {
       success: false,
-      error: 'VALIDATION_ERROR',
+      error: 'FETCH_ERROR',
       message: error instanceof Error ? error.message : 'Failed to fetch skybox styles'
     };
 
-    res.status(400).json(response);
+    res.status(500).json(response);
   }
 };
 
@@ -42,13 +57,39 @@ export const getSkyboxStyles = async (req: Request, res: Response) => {
  * POST /api/skybox/generate
  */
 export const generateSkybox = async (req: Request, res: Response) => {
+  console.log('🌅 [DEBUG] Backend generateSkybox called');
+  console.log('🌅 [DEBUG] Request body:', {
+    ...req.body,
+    prompt: req.body.prompt?.substring(0, 50) + (req.body.prompt?.length > 50 ? '...' : ''),
+    negative_text: req.body.negative_text?.substring(0, 30) + (req.body.negative_text?.length > 30 ? '...' : '')
+  });
+  console.log('🌅 [DEBUG] Request headers:', {
+    'content-type': req.headers['content-type'],
+    'user-agent': req.headers['user-agent']?.substring(0, 50),
+    authorization: req.headers.authorization ? 'Present' : 'Missing'
+  });
+
   try {
     const { prompt, skybox_style_id, remix_imagine_id, webhook_url, negative_text } = req.body;
 
-    console.log(`Skybox API: POST /generate - style_id: ${skybox_style_id}`);
+    console.log(`🌅 [DEBUG] Skybox API: POST /generate - style_id: ${skybox_style_id}`);
+    console.log('🌅 [DEBUG] Extracted parameters:', {
+      prompt: prompt?.substring(0, 50) + '...',
+      promptLength: prompt?.length,
+      skybox_style_id,
+      hasRemixId: !!remix_imagine_id,
+      hasWebhookUrl: !!webhook_url,
+      hasNegativeText: !!negative_text,
+      negativeTextLength: negative_text?.length
+    });
 
     // Validate required fields
     if (!prompt || !skybox_style_id) {
+      console.error('❌ [DEBUG] Validation failed - missing required fields:', {
+        hasPrompt: !!prompt,
+        hasSkyboxStyleId: !!skybox_style_id
+      });
+      
       const response: ApiResponse<null> = {
         success: false,
         error: 'VALIDATION_ERROR',
@@ -57,6 +98,7 @@ export const generateSkybox = async (req: Request, res: Response) => {
       return res.status(400).json(response);
     }
 
+    console.log('✅ [DEBUG] Validation passed, creating request object');
     const request: SkyboxGenerationRequest = {
       prompt: prompt.trim(),
       skybox_style_id: parseInt(skybox_style_id),
@@ -65,68 +107,117 @@ export const generateSkybox = async (req: Request, res: Response) => {
       negative_text
     };
 
-    const generation = await skyboxService.generateSkybox(request);
+    console.log('🌅 [DEBUG] Calling skyboxService.generateSkybox with:', {
+      ...request,
+      prompt: request.prompt.substring(0, 50) + '...',
+      negative_text: request.negative_text?.substring(0, 30) + (request.negative_text && request.negative_text.length > 30 ? '...' : '')
+    });
 
-    const response: ApiResponse<{ id: string; status: string }> = {
+    const startTime = Date.now();
+    const generation = await skyboxService.generateSkybox(request);
+    const duration = Date.now() - startTime;
+
+    console.log('🎉 [DEBUG] skyboxService.generateSkybox completed in', duration + 'ms');
+    console.log('🎉 [DEBUG] Generation result:', {
+      id: generation.id,
+      status: generation.status,
+      hasWebhookUrl: !!generation.webhook_url
+    });
+
+    const response: ApiResponse<{ generationId: string; status: string }> = {
       success: true,
       data: {
-        id: generation.id.toString(),
+        generationId: generation.id.toString(),
         status: generation.status
       },
       message: 'Skybox generation initiated successfully'
     };
 
+    console.log('📤 [DEBUG] Sending success response:', {
+      generationId: response.data?.generationId,
+      status: response.data?.status
+    });
+
     res.status(200).json(response);
   } catch (error) {
-    console.error('Skybox API Error - generateSkybox:', error);
+    console.error('❌ [DEBUG] Skybox API Error - generateSkybox:', error);
+    console.error('❌ [DEBUG] Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : 'No stack trace',
+      type: typeof error
+    });
     
     const response: ApiResponse<null> = {
       success: false,
-      error: 'VALIDATION_ERROR',
+      error: 'GENERATION_ERROR',
       message: error instanceof Error ? error.message : 'Failed to generate skybox'
     };
 
+    console.log('📤 [DEBUG] Sending error response:', response);
     res.status(400).json(response);
   }
 };
 
 /**
- * Get generation status by ID
+ * Get skybox generation status
  * GET /api/skybox/status/:generationId
  */
-export const getGenerationStatus = async (req: Request, res: Response) => {
+export const getSkyboxStatus = async (req: Request, res: Response) => {
+  console.log('📊 [DEBUG] Backend getSkyboxStatus called');
+  console.log('📊 [DEBUG] Request params:', req.params);
+  
   try {
     const { generationId } = req.params;
 
-    console.log(`Skybox API: GET /status/${generationId}`);
+    console.log(`📊 [DEBUG] Skybox API: GET /status/${generationId}`);
 
     if (!generationId) {
+      console.error('❌ [DEBUG] Validation failed - missing generationId');
       const response: ApiResponse<null> = {
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'Valid generation ID is required'
+        message: 'Generation ID is required'
       };
       return res.status(400).json(response);
     }
 
-    const status = await skyboxService.getGenerationStatus(generationId);
+    console.log('📊 [DEBUG] Calling skyboxService.getSkyboxStatus...');
+    const startTime = Date.now();
+    const status = await skyboxService.getSkyboxStatus(generationId);
+    const duration = Date.now() - startTime;
+
+    console.log('📊 [DEBUG] skyboxService.getSkyboxStatus completed in', duration + 'ms');
+    console.log('📊 [DEBUG] Status result:', {
+      id: status.id,
+      status: status.status,
+      hasFileUrl: !!status.file_url,
+      hasThumbnailUrl: !!status.thumbnail_url,
+      progress: status.progress
+    });
 
     const response: ApiResponse<any> = {
       success: true,
       data: status,
-      message: `Generation status: ${status.status}`
+      message: 'Skybox status retrieved successfully'
     };
 
+    console.log('📤 [DEBUG] Sending status response for:', generationId);
     res.status(200).json(response);
   } catch (error) {
-    console.error('Skybox API Error - getGenerationStatus:', error);
+    console.error('❌ [DEBUG] Skybox API Error - getSkyboxStatus:', error);
+    console.error('❌ [DEBUG] Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : 'No stack trace',
+      generationId: req.params.generationId
+    });
     
     const response: ApiResponse<null> = {
       success: false,
-      error: 'VALIDATION_ERROR',
-      message: error instanceof Error ? error.message : 'Failed to get generation status'
+      error: 'STATUS_ERROR',
+      message: error instanceof Error ? error.message : 'Failed to get skybox status'
     };
 
+    console.log('📤 [DEBUG] Sending status error response');
     res.status(400).json(response);
   }
 };

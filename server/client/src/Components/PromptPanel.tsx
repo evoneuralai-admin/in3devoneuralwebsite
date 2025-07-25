@@ -159,17 +159,33 @@ export const PromptPanel: React.FC<PromptPanelProps> = ({
 
   // Handle generation
   const handleGenerate = useCallback(async () => {
+    console.log('🚀 [DEBUG] handleGenerate called');
+    console.log('🚀 [DEBUG] User state:', { uid: user?.uid, email: user?.email });
+    console.log('🚀 [DEBUG] Form state:', {
+      prompt: prompt.trim(),
+      promptLength: prompt.trim().length,
+      enableSkybox,
+      enableMesh,
+      selectedStyle: selectedStyle ? { id: selectedStyle.id, name: selectedStyle.name } : null,
+      negativePrompt: negativePrompt.trim(),
+      meshQuality,
+      meshStyle
+    });
+
     if (!user?.uid) {
+      console.error('❌ [DEBUG] User not logged in');
       alert('Please log in to generate assets');
       return;
     }
 
     const errors = validateForm();
     if (errors.length > 0) {
+      console.error('❌ [DEBUG] Form validation failed:', errors);
       alert(errors.join('\n'));
       return;
     }
 
+    console.log('✅ [DEBUG] Form validation passed');
     console.log('🎮 Starting generation from PromptPanel:', {
       prompt: prompt.trim(),
       enableSkybox,
@@ -179,6 +195,7 @@ export const PromptPanel: React.FC<PromptPanelProps> = ({
       meshStyle
     });
 
+    console.log('📞 [DEBUG] Calling onGenerationStart callback');
     onGenerationStart?.();
 
     const request: GenerationRequest = {
@@ -195,14 +212,30 @@ export const PromptPanel: React.FC<PromptPanelProps> = ({
       } : false
     };
 
-    console.log('📤 Sending generation request:', request);
+    console.log('📤 [DEBUG] Generation request created:', JSON.stringify(request, null, 2));
+    console.log('🔄 [DEBUG] About to call generateAssets from useGenerate hook...');
 
     try {
+      const startTime = Date.now();
+      console.log('⏱️ [DEBUG] Generation started at:', new Date(startTime).toISOString());
+      
       const response = await generateAssets(request);
-      console.log('📥 Generation response:', response);
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      
+      console.log('📥 [DEBUG] Generation response received:', response);
+      console.log('⏱️ [DEBUG] Generation completed in:', duration + 'ms');
       
       if (response.success) {
-        console.log('✅ Generation successful, job ID:', response.jobId);
+        console.log('✅ [DEBUG] Generation successful, job ID:', response.jobId);
+        console.log('✅ [DEBUG] Response data:', {
+          jobId: response.jobId,
+          skyboxUrl: response.skyboxUrl,
+          meshUrl: response.meshUrl,
+          errors: response.errors
+        });
+        
+        console.log('📞 [DEBUG] Calling onAssetsGenerated callback with jobId:', response.jobId);
         onAssetsGenerated?.(response.jobId);
         setIsMinimized(true);
         
@@ -222,7 +255,7 @@ export const PromptPanel: React.FC<PromptPanelProps> = ({
           }
         }, 5000);
       } else {
-        console.error('❌ Generation failed:', response.errors);
+        console.error('❌ [DEBUG] Generation failed:', response.errors);
         
         // Show partial success message if mesh worked but skybox failed
         if (response.errors.some(error => error.includes('Skybox service'))) {
@@ -243,11 +276,20 @@ export const PromptPanel: React.FC<PromptPanelProps> = ({
         }
       }
     } catch (error) {
-      console.error('💥 Generation error:', error);
+      const endTime = Date.now();
+      const startTime = endTime - 5000; // Approximate
+      console.error('💥 [DEBUG] Generation error caught:', error);
+      console.error('💥 [DEBUG] Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        type: typeof error,
+        duration: endTime - startTime + 'ms'
+      });
       
       // Show user-friendly error message
       if (error instanceof Error) {
         if (error.message.includes('Skybox service is not available')) {
+          console.log('🔄 [DEBUG] Skybox service unavailable, disabling skybox generation');
           // Automatically disable skybox and suggest mesh-only generation
           setEnableSkybox(false);
           

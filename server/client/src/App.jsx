@@ -27,6 +27,7 @@ import ThreeDGenerate from './screens/MeshyGenerate';
 import AssetGenerator from './screens/AssetGenerator';
 import { PreviewScene } from './screens/PreviewScene';
 import { PromptPanel } from './Components/PromptPanel';
+import { UnifiedPromptInterface } from './Components/UnifiedPromptInterface';
 import { MeshyTestPanel } from './Components/MeshyTestPanel';
 import { MeshyDebugPanel } from './Components/MeshyDebugPanel';
 import { ServiceStatusPanel } from './Components/ServiceStatusPanel';
@@ -363,17 +364,7 @@ function App() {
                       } />
                       <Route path="/unified-prompt" element={
                         <ProtectedRoute>
-                          <div className="min-h-screen bg-gray-900 p-4">
-                            <div className="max-w-4xl mx-auto">
-                              <PromptPanel 
-                                onAssetsGenerated={(jobId) => {
-                                  // Navigate to preview after successful generation
-                                  window.location.href = `/preview/${jobId}`;
-                                }}
-                                className="w-full"
-                              />
-                            </div>
-                          </div>
+                          <UnifiedPromptInterface />
                         </ProtectedRoute>
                       } />
                       <Route path="/preview/:jobId" element={

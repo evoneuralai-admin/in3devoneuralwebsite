@@ -81,58 +81,124 @@ export const useGenerate = (): UnifiedGenerationHookResult => {
     jobId: string,
     onProgress: (progress: number) => void
   ): Promise<SkyboxResult> => {
-    const maxAttempts = 30; // 5 minutes max
-    const pollInterval = 10000; // 10 seconds
+    console.log('🔄 [DEBUG] pollSkyboxStatus started for generation:', {
+      generationId,
+      jobId,
+      timestamp: new Date().toISOString()
+    });
+
+    const maxAttempts = 60; // 5 minutes at 5-second intervals
+    const pollInterval = 5000; // 5 seconds
     let attempts = 0;
+    let lastStatus = '';
 
     while (attempts < maxAttempts) {
       try {
-        const response = await skyboxApiService.getSkyboxStatus(generationId);
+        console.log(`🔄 [DEBUG] Polling attempt ${attempts + 1}/${maxAttempts} for generation:`, generationId);
         
-        if (response.success && response.data) {
-          const status = response.data.status;
-          
-          if (status === 'completed' || status === 'complete') {
-            return {
-              id: generationId,
-              status: 'completed',
-              fileUrl: response.data.file_url,
-              thumbnailUrl: response.data.thumbnail_url,
-              downloadUrl: response.data.file_url,
-              prompt: response.data.prompt || '',
-              styleId: response.data.style_id || '',
-              format: 'png',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              metadata: {
-                size: response.data.size,
-                style: response.data.style_name
-              }
-            };
-          } else if (status === 'failed' || status === 'error') {
-            throw new Error(`Skybox generation failed: ${response.data.error || 'Unknown error'}`);
+        const startTime = Date.now();
+        const statusResponse = await skyboxApiService.getStatus(generationId);
+        const pollDuration = Date.now() - startTime;
+
+        console.log(`📊 [DEBUG] Status response received in ${pollDuration}ms:`, {
+          success: statusResponse.success,
+          status: statusResponse.data?.status,
+          previousStatus: lastStatus,
+          statusChanged: statusResponse.data?.status !== lastStatus,
+          hasFileUrl: !!statusResponse.data?.file_url,
+          attempt: attempts + 1
+        });
+
+        if (!statusResponse.success) {
+          console.error('❌ [DEBUG] Status check failed:', statusResponse.error);
+          throw new Error(statusResponse.error || 'Failed to check generation status');
+        }
+
+        const generation = statusResponse.data;
+        const currentStatus = generation.status;
+        
+        if (currentStatus !== lastStatus) {
+          console.log(`🔄 [DEBUG] Status changed from '${lastStatus}' to '${currentStatus}'`);
+          lastStatus = currentStatus;
+        }
+
+        // Calculate progress based on status
+        let progressPercent = 0;
+        switch (currentStatus) {
+          case 'pending':
+            progressPercent = 10;
+            break;
+          case 'processing':
+          case 'dispatched':
+            progressPercent = 30 + (attempts * 2); // Gradually increase
+            break;
+          case 'complete':
+            progressPercent = 100;
+            break;
+          case 'failed':
+          case 'error':
+            console.error('❌ [DEBUG] Generation failed with status:', currentStatus);
+            throw new Error(`Skybox generation failed: ${generation.error_message || 'Unknown error'}`);
+          default:
+            progressPercent = Math.min(20 + (attempts * 1.5), 80);
+        }
+
+        console.log(`📊 [DEBUG] Progress calculated: ${progressPercent}% (status: ${currentStatus})`);
+        onProgress(Math.min(progressPercent, 99)); // Never report 100% until actually complete
+
+        if (currentStatus === 'complete') {
+          console.log('✅ [DEBUG] Generation completed successfully:', {
+            generationId,
+            fileUrl: generation.file_url,
+            thumbnailUrl: generation.thumbnail_url,
+            totalAttempts: attempts + 1,
+            totalTime: ((attempts + 1) * pollInterval / 1000) + 's'
+          });
+
+          if (!generation.file_url) {
+            console.error('❌ [DEBUG] Generation marked complete but no file URL provided');
+            throw new Error('Generation completed but no file URL was provided');
           }
+
+          const result: SkyboxResult = {
+            generationId: generation.id || generationId,
+            fileUrl: generation.file_url,
+            thumbnailUrl: generation.thumbnail_url,
+            styleId: generation.skybox_style_id || generation.style_id,
+            prompt: generation.prompt || '',
+            status: 'completed'
+          };
+
+          console.log('🎉 [DEBUG] Returning skybox result:', result);
+          onProgress(100); // Now we can report 100%
           
-          // Update progress
-          const progressPercent = Math.min((attempts / maxAttempts) * 100, 95);
-          onProgress(progressPercent);
+          return result;
+        }
+
+        attempts++;
+        
+        // Wait before next poll (except on last attempt)
+        if (attempts < maxAttempts) {
+          console.log(`⏳ [DEBUG] Waiting ${pollInterval}ms before next poll...`);
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
         }
         
-        attempts++;
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
       } catch (error) {
-        console.error('Error polling skybox status:', error);
-        attempts++;
+        console.error(`❌ [DEBUG] Polling error on attempt ${attempts + 1}:`, error);
         
-        if (attempts >= maxAttempts) {
+        if (attempts >= 3) { // Allow a few retries for network issues
+          console.error('❌ [DEBUG] Multiple polling failures, giving up');
           throw error;
         }
         
+        console.log('🔄 [DEBUG] Retrying after network error...');
+        attempts++;
         await new Promise(resolve => setTimeout(resolve, pollInterval));
       }
     }
-    
-    throw new Error('Skybox generation timed out');
+
+    console.error('⏰ [DEBUG] Polling timeout reached after', maxAttempts, 'attempts');
+    throw new Error(`Skybox generation timed out after ${maxAttempts * pollInterval / 1000} seconds`);
   }, []);
 
   const pollMeshStatus = useCallback(async (
@@ -254,30 +320,55 @@ export const useGenerate = (): UnifiedGenerationHookResult => {
     request: GenerationRequest,
     jobId: string
   ): Promise<SkyboxResult> => {
+    console.log('🌅 [DEBUG] generateSkybox called with:', {
+      jobId,
+      skyboxConfig: request.skyboxConfig,
+      prompt: request.prompt.substring(0, 50) + '...'
+    });
+
     if (!request.skyboxConfig) {
+      console.error('❌ [DEBUG] Skybox configuration missing');
       throw new Error('Skybox configuration is required');
     }
 
     try {
-      console.log('🌅 Starting skybox generation...');
+      console.log('🌅 [DEBUG] Starting skybox generation...');
+      console.log('🌅 [DEBUG] Calling skyboxApiService.generateSkybox with:', {
+        prompt: request.prompt,
+        style_id: request.skyboxConfig.styleId,
+        negative_prompt: request.skyboxConfig.negativePrompt,
+        userId: request.userId
+      });
       
+      const apiCallStart = Date.now();
       const response = await skyboxApiService.generateSkybox({
         prompt: request.prompt,
         style_id: request.skyboxConfig.styleId,
         negative_prompt: request.skyboxConfig.negativePrompt,
         userId: request.userId
       });
+      const apiCallDuration = Date.now() - apiCallStart;
+
+      console.log('📡 [DEBUG] skyboxApiService response received in', apiCallDuration + 'ms:', response);
 
       if (!response.success || !response.data) {
+        console.error('❌ [DEBUG] Skybox API call failed:', {
+          success: response.success,
+          data: response.data,
+          error: response.error
+        });
         throw new Error(response.error || 'Failed to start skybox generation');
       }
 
-      console.log('✅ Skybox generation initiated, polling for completion...');
+      console.log('✅ [DEBUG] Skybox generation initiated with ID:', response.data.generationId);
+      console.log('🔄 [DEBUG] Starting polling for completion...');
       
-      return await pollSkyboxStatus(
+      const pollStart = Date.now();
+      const result = await pollSkyboxStatus(
         response.data.generationId,
         jobId,
         (progress) => {
+          console.log('📊 [DEBUG] Skybox progress update:', progress + '%');
           setProgress(prev => prev ? {
             ...prev,
             skyboxProgress: progress,
@@ -285,14 +376,27 @@ export const useGenerate = (): UnifiedGenerationHookResult => {
           } : null);
         }
       );
+      const pollDuration = Date.now() - pollStart;
+
+      console.log('🎉 [DEBUG] Skybox generation completed in', pollDuration + 'ms:', {
+        generationId: result.generationId,
+        fileUrl: result.fileUrl,
+        thumbnailUrl: result.thumbnailUrl,
+        styleId: result.styleId
+      });
+
+      return result;
     } catch (error) {
-      console.error('❌ Skybox generation failed:', error);
+      console.error('❌ [DEBUG] Skybox generation failed:', error);
+      console.error('❌ [DEBUG] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
       
       // Add specific error context
       if (error instanceof Error) {
         if (error.message.includes('not configured properly')) {
+          console.error('🔧 [DEBUG] Configuration error detected');
           throw new Error('Skybox service is not available. Please contact support or try mesh generation only.');
         } else if (error.message.includes('temporarily unavailable')) {
+          console.error('⏳ [DEBUG] Service availability error detected');
           throw new Error('Skybox service is temporarily down. Please try again later or use mesh generation only.');
         }
       }
@@ -362,26 +466,44 @@ export const useGenerate = (): UnifiedGenerationHookResult => {
   const generateAssets = useCallback(async (
     request: GenerationRequest
   ): Promise<GenerationResponse> => {
+    console.log('🚀 [DEBUG] generateAssets called with request:', JSON.stringify(request, null, 2));
+
     try {
       // Validate request
+      console.log('✅ [DEBUG] Validating request...');
       const validationErrors = validateRequest(request);
       if (validationErrors.length > 0) {
+        console.error('❌ [DEBUG] Request validation failed:', validationErrors);
         throw new Error(validationErrors.join(', '));
       }
+      console.log('✅ [DEBUG] Request validation passed');
 
       if (!user?.uid) {
+        console.error('❌ [DEBUG] User not authenticated');
         throw new Error('User must be logged in');
       }
+      console.log('👤 [DEBUG] User authenticated:', user.uid);
 
+      console.log('🏗️ [DEBUG] Setting up generation state...');
       setIsGenerating(true);
       setError(null);
 
       // Create job
+      console.log('📝 [DEBUG] Creating job...');
       const jobId = unifiedStorageService.generateJobId();
+      console.log('🆔 [DEBUG] Generated job ID:', jobId);
+      
       const job = await unifiedStorageService.createJob(jobId, request.prompt, user.uid);
+      console.log('📁 [DEBUG] Job created:', {
+        id: job.id,
+        prompt: job.prompt,
+        userId: job.userId,
+        createdAt: job.createdAt
+      });
       setCurrentJob(job);
 
       // Initialize progress
+      console.log('📊 [DEBUG] Initializing progress tracking...');
       setProgress({
         jobId,
         stage: 'initializing',
@@ -392,102 +514,182 @@ export const useGenerate = (): UnifiedGenerationHookResult => {
         errors: []
       });
       
-      console.log('🚀 Starting unified generation with config:', {
+      console.log('🚀 [DEBUG] Starting unified generation with config:', {
         skyboxEnabled: !!request.skyboxConfig,
         meshEnabled: request.meshConfig !== false,
-        prompt: request.prompt.substring(0, 50) + '...'
+        prompt: request.prompt.substring(0, 50) + '...',
+        jobId
       });
 
       // Create abort controller
       abortControllerRef.current = new AbortController();
+      console.log('🛑 [DEBUG] Abort controller created');
 
       // Generate timestamp for storage
       const timestamp = unifiedStorageService.generateTimestamp();
+      console.log('⏰ [DEBUG] Generated timestamp:', timestamp);
 
       // Start parallel generation using Promise.allSettled
       const generationPromises: Promise<SkyboxResult | MeshResult>[] = [];
       
       // Add skybox generation if configured
       if (request.skyboxConfig) {
+        console.log('🌅 [DEBUG] Adding skybox generation to queue');
         setProgress(prev => prev ? { ...prev, stage: 'skybox_generating', message: 'Generating skybox...' } : null);
         generationPromises.push(generateSkybox(request, jobId));
+      } else {
+        console.log('🚫 [DEBUG] Skybox generation disabled or not configured');
       }
 
       // Add mesh generation if configured
       if (request.meshConfig !== false) { // Default to true unless explicitly false
+        console.log('🎯 [DEBUG] Adding mesh generation to queue');
         setProgress(prev => prev ? { ...prev, stage: 'mesh_generating', message: 'Generating mesh...' } : null);
         generationPromises.push(generateMesh(request, jobId));
+      } else {
+        console.log('🚫 [DEBUG] Mesh generation disabled');
       }
 
       if (generationPromises.length === 0) {
+        console.error('❌ [DEBUG] No generation types enabled');
         throw new Error('At least one generation type must be enabled');
       }
 
+      console.log('⚡ [DEBUG] Starting', generationPromises.length, 'parallel generation(s)...');
+      const generationStart = Date.now();
+
       // Execute parallel generation
       const results = await Promise.allSettled(generationPromises);
+      const generationDuration = Date.now() - generationStart;
       
+      console.log('📥 [DEBUG] All generations completed in', generationDuration + 'ms');
+      console.log('📊 [DEBUG] Results summary:', results.map((result, index) => ({
+        index,
+        status: result.status,
+        success: result.status === 'fulfilled',
+        error: result.status === 'rejected' ? result.reason?.message : undefined
+      })));
+
       // Process results
       let skyboxResult: SkyboxResult | undefined;
       let meshResult: MeshResult | undefined;
       const errors: string[] = [];
 
       results.forEach((result, index) => {
+        console.log(`📋 [DEBUG] Processing result ${index}:`, result.status);
         if (result.status === 'fulfilled') {
           const asset = result.value;
+          console.log('✅ [DEBUG] Asset generated successfully:', {
+            type: 'styleId' in asset ? 'skybox' : 'mesh',
+            hasUrl: !!asset.fileUrl
+          });
           if ('styleId' in asset) {
             skyboxResult = asset as SkyboxResult;
+            console.log('🌅 [DEBUG] Skybox result stored:', {
+              generationId: skyboxResult.generationId,
+              fileUrl: skyboxResult.fileUrl,
+              styleId: skyboxResult.styleId
+            });
           } else {
             meshResult = asset as MeshResult;
+            console.log('🎯 [DEBUG] Mesh result stored:', {
+              taskId: meshResult.taskId,
+              fileUrl: meshResult.fileUrl,
+              format: meshResult.format
+            });
           }
         } else {
           const errorMessage = result.reason?.message || 'Unknown error';
+          console.error(`❌ [DEBUG] Generation ${index} failed:`, errorMessage);
           errors.push(errorMessage);
-          console.error(`Generation error:`, result.reason);
+          console.error(`❌ [DEBUG] Full error:`, result.reason);
         }
       });
 
       // Store assets in Firebase Storage with fallback to direct URLs
+      console.log('💾 [DEBUG] Starting asset storage phase...');
       setProgress(prev => prev ? { ...prev, stage: 'storing', message: 'Storing assets...' } : null);
       
       let skyboxUrl: string | undefined;
       let meshUrl: string | undefined;
 
-      if (skyboxResult && skyboxResult.downloadUrl) {
+      if (skyboxResult && skyboxResult.fileUrl) {
+        console.log('🌅 [DEBUG] Processing skybox result:', {
+          generationId: skyboxResult.generationId,
+          fileUrl: skyboxResult.fileUrl,
+          hasDownloadUrl: !!skyboxResult.downloadUrl,
+          format: skyboxResult.format
+        });
+
         try {
-          // Try to store in Firebase Storage
+          console.log('💾 [DEBUG] Attempting to store skybox in Firebase Storage...');
+          const storageStart = Date.now();
+          
+          // Use fileUrl as the source (this is the actual image URL from Blockade Labs)
           skyboxUrl = await unifiedStorageService.storeAssetFromUrl(
-            skyboxResult.downloadUrl,
+            skyboxResult.fileUrl, // Use fileUrl instead of downloadUrl
             jobId,
             user.uid,
             timestamp,
             'skybox',
-            skyboxResult.format
+            'png' // Skyboxes are typically PNG
           );
-          console.log('✅ Skybox stored in Firebase Storage:', skyboxUrl);
+          
+          const storageDuration = Date.now() - storageStart;
+          console.log('✅ [DEBUG] Skybox stored in Firebase Storage in', storageDuration + 'ms:', skyboxUrl);
         } catch (error) {
-          console.warn('⚠️ Failed to store skybox in Firebase Storage, using direct URL:', error);
-          // Fallback to direct URL like the working route
-          skyboxUrl = skyboxResult.downloadUrl;
+          console.error('❌ [DEBUG] Failed to store skybox in Firebase Storage:', error);
+          console.error('❌ [DEBUG] Storage error details:', {
+            message: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : 'No stack trace',
+            sourceUrl: skyboxResult.fileUrl
+          });
+          
+          console.log('🔄 [DEBUG] Falling back to direct URL');
+          // Fallback to direct URL from Blockade Labs
+          skyboxUrl = skyboxResult.fileUrl;
         }
+      } else if (skyboxResult) {
+        console.log('⚠️ [DEBUG] Skybox result exists but no fileUrl:', skyboxResult);
       }
 
-      if (meshResult && meshResult.downloadUrl) {
+      if (meshResult && meshResult.fileUrl) {
+        console.log('🎯 [DEBUG] Processing mesh result:', {
+          taskId: meshResult.taskId,
+          fileUrl: meshResult.fileUrl,
+          hasDownloadUrl: !!meshResult.downloadUrl,
+          format: meshResult.format
+        });
+
         try {
-          // Try to store in Firebase Storage
+          console.log('💾 [DEBUG] Attempting to store mesh in Firebase Storage...');
+          const storageStart = Date.now();
+          
           meshUrl = await unifiedStorageService.storeAssetFromUrl(
-            meshResult.downloadUrl,
+            meshResult.fileUrl,
             jobId,
             user.uid,
             timestamp,
             'mesh',
-            meshResult.format
+            meshResult.format || 'glb'
           );
-          console.log('✅ Mesh stored in Firebase Storage:', meshUrl);
+          
+          const storageDuration = Date.now() - storageStart;
+          console.log('✅ [DEBUG] Mesh stored in Firebase Storage in', storageDuration + 'ms:', meshUrl);
         } catch (error) {
-          console.warn('⚠️ Failed to store mesh in Firebase Storage, using direct URL:', error);
-          // Fallback to direct URL like the working route
-          meshUrl = meshResult.downloadUrl;
+          console.error('❌ [DEBUG] Failed to store mesh in Firebase Storage:', error);
+          console.error('❌ [DEBUG] Storage error details:', {
+            message: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : 'No stack trace',
+            sourceUrl: meshResult.fileUrl
+          });
+          
+          console.log('🔄 [DEBUG] Falling back to direct URL');
+          // Fallback to direct URL
+          meshUrl = meshResult.fileUrl;
         }
+      } else if (meshResult) {
+        console.log('⚠️ [DEBUG] Mesh result exists but no fileUrl:', meshResult);
       }
 
       // Determine final job status
