@@ -4,6 +4,7 @@ import paymentRoutes from './payment';
 import skyboxRoutes from './skybox';
 import linkedinRoutes from './linkedin';
 import subscriptionRoutes from './subscription';
+import emailRoutes from './email';
 
 const router = express.Router();
 
@@ -83,6 +84,18 @@ console.log('Skybox routes mounted at /skybox');
 console.log('Mounting LinkedIn routes...');
 router.use('/api', linkedinRoutes);
 console.log('LinkedIn routes mounted at /api');
+
+// Mount email routes
+console.log('Mounting email routes...');
+try {
+  router.use('/email', emailRoutes);
+  console.log('✅ Email routes mounted at /email');
+  console.log('📧 Email routes available:');
+  console.log('   - GET  /api/email/test');
+  console.log('   - POST /api/email/contact');
+} catch (error) {
+  console.error('❌ Error mounting email routes:', error);
+}
 
 // Debug: List all registered routes
 const listRoutes = (router: express.Router, basePath: string = '') => {

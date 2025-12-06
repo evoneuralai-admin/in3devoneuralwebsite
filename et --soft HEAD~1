@@ -1,0 +1,48 @@
+[33mcommit fc2c5c698f37a048355bf537b8cef2a02b3ec7a3[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mManav_New[m[33m, [m[1;31morigin/Manav_New[m[33m)[m
+Author: manav-05-06 <manavkhandelwal72@gmail.com>
+Date:   Thu Dec 4 15:17:34 2025 +0530
+
+    Commit changes to Manav_New branch
+
+ .firebase/hosting.c2VydmVyXGNsaWVudFxkaXN0.cache   |  19 [32m++[m
+ BLOCKADE_API_KEY_SETUP.md                          |  88 [32m++++++++[m
+ ENABLE_SECRET.md                                   |  67 [32m++++++[m
+ FINAL_SETUP_STEPS.md                               |  54 [32m+++++[m
+ FIREBASE_PERMISSIONS_SETUP.md                      | 127 [32m+++++++++++[m
+ FIREBASE_SETUP.md                                  | 240 [32m+++++++++++++++++++++[m
+ FIX_SKYBOX_ERROR.md                                | 127 [32m+++++++++++[m
+ PERMISSIONS_STATUS.md                              |  86 [32m++++++++[m
+ PREVIEW_CHANNEL_DEPLOYMENT.md                      |  76 [32m+++++++[m
+ PREVIEW_CHANNEL_TROUBLESHOOTING.md                 | 172 [32m+++++++++++++++[m
+ QUICK_FIX_BLOCKADE_API_KEY.md                      |  84 [32m++++++++[m
+ TEST_SKYBOX_GENERATION.md                          | 127 [32m+++++++++++[m
+ deploy-after-secret-setup.ps1                      |  15 [32m++[m
+ deploy-preview-channel.ps1                         |  52 [32m+++++[m
+ diagnose-preview-channel.ps1                       |  56 [32m+++++[m
+ firebase.json                                      |  34 [32m++[m[31m-[m
+ functions/package-lock.json                        |  22 [32m+[m[31m-[m
+ functions/package.json                             |   2 [32m+[m[31m-[m
+ functions/src/index.ts                             | 180 [32m+++++++++++[m[31m-----[m
+ grant-secret-access.md                             |  45 [32m++++[m
+ quick-fix-permissions.ps1                          |  26 [32m+++[m
+ server/client/.env                                 |  14 [32m+[m[31m-[m
+ server/client/dist/index.html                      |   8 [32m+[m[31m-[m
+ server/client/package.json                         |   5 [32m+[m[31m-[m
+ .../src/Components/AssetViewerWithSkybox.tsx       |   4 [32m+[m[31m-[m
+ server/client/src/Components/MainSection.jsx       |  98 [32m+++++++[m[31m--[m
+ server/client/src/Components/Meshy3DViewer.tsx     |   7 [32m+[m[31m-[m
+ .../src/Components/SkyboxEnvironmentViewer.tsx     |   4 [32m+[m[31m-[m
+ server/client/src/config/axios.ts                  |  12 [32m+[m[31m-[m
+ server/client/src/config/firebase.ts               |  18 [32m+[m[31m-[m
+ server/client/src/hooks/useGenerate.ts             |  18 [32m+[m[31m-[m
+ server/client/src/screens/PreviewScene.tsx         |   7 [32m+[m[31m-[m
+ server/client/src/services/apiService.ts           |  19 [32m+[m[31m-[m
+ server/client/src/services/meshyApiService.ts      |  13 [32m+[m[31m-[m
+ server/client/src/services/skyboxApiService.ts     | 149 [32m++++++++++++[m[31m-[m
+ .../client/src/services/unifiedStorageService.ts   |   8 [32m+[m[31m-[m
+ server/client/src/utils/apiConfig.ts               |  39 [32m++++[m
+ server/client/src/utils/corsTestUtils.ts           |   6 [32m+[m[31m-[m
+ set-blockade-api-key.ps1                           |  34 [32m+++[m
+ test-skybox-api.ps1                                |  43 [32m++++[m
+ test-skybox-generation.ps1                         |  62 [32m++++++[m
+ 41 files changed, 2110 insertions(+), 157 deletions(-)

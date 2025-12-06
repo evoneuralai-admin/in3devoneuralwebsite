@@ -3,16 +3,26 @@ import { db } from '../config/firebase';
 import { SubscriptionPlan, UserSubscription } from '../types/subscription';
 import api from '../config/axios';
 
-export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
+// Helper function to get plans with specific billing cycle
+export const getSubscriptionPlans = (billingCycle: 'monthly' | 'yearly'): SubscriptionPlan[] => {
+  const basePlans = [
   {
     id: 'free',
     name: 'Free',
-    price: 0,
-    billingCycle: 'monthly',
+      monthlyPrice: 0,
+      yearlyPrice: 0,
+      monthlyIn3DGenerations: 5,
+      assetsPerGeneration: 1,
+      maxAssetsPerMonth: 5,
+      commercialRights: false,
+      teamCollaboration: false,
+      apiAccess: false,
+      unityUnrealIntegration: false,
+      supportLevel: 'Community',
     features: [
-      'Generate up to 5 skyboxes',
-      'Basic styles available',
-      'Standard quality output',
+        '5 In3D.Ai generations per month',
+        '1 asset per generation',
+        '5 max assets per month',
       'Community support'
     ],
     limits: {
@@ -25,18 +35,57 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'pro',
     name: 'Pro',
-    price: 999, // ₹999/month
-    billingCycle: 'monthly',
+      monthlyPrice: 12000, // ₹12,000/month
+      yearlyPrice: 120000, // ₹1,20,000/year
+      monthlyIn3DGenerations: 60,
+      assetsPerGeneration: 3,
+      maxAssetsPerMonth: 180,
+      commercialRights: true,
+      teamCollaboration: false,
+      apiAccess: true,
+      unityUnrealIntegration: true,
+      supportLevel: 'Standard',
+      features: [
+        '60 In3D.Ai generations per month',
+        '3 assets per generation',
+        '180 max assets per month',
+        'Commercial rights',
+        'API access',
+        'Unity/Unreal integration',
+        'Standard support'
+      ],
+      limits: {
+        skyboxGenerations: 60,
+        maxQuality: 'high',
+        customStyles: true,
+        apiAccess: true
+      }
+    },
+    {
+      id: 'team',
+      name: 'Team',
+      monthlyPrice: 25000, // ₹25,000/month
+      yearlyPrice: 250000, // ₹2,50,000/year
+      monthlyIn3DGenerations: 120,
+      assetsPerGeneration: 4,
+      maxAssetsPerMonth: 480,
+      commercialRights: true,
+      teamCollaboration: true,
+      apiAccess: true,
+      unityUnrealIntegration: true,
+      supportLevel: 'Priority',
     features: [
-      'Generate up to 50 skyboxes',
-      'All styles available',
-      'High quality output',
-      'Priority support',
+        '120 In3D.Ai generations per month',
+        '4 assets per generation',
+        '480 max assets per month',
+        'Commercial rights',
+        'Team collaboration',
       'API access',
-      'Custom style creation'
+        'Unity/Unreal integration',
+        'Priority support'
     ],
     limits: {
-      skyboxGenerations: 50,
+        skyboxGenerations: 120,
       maxQuality: 'high',
       customStyles: true,
       apiAccess: true
@@ -45,24 +94,55 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
   {
     id: 'enterprise',
     name: 'Enterprise',
-    price: 4999, // ₹4999/month
-    billingCycle: 'monthly',
+      monthlyPrice: null, // Contact Us
+      yearlyPrice: null, // Custom
+      monthlyIn3DGenerations: null, // Custom
+      assetsPerGeneration: 5,
+      maxAssetsPerMonth: null, // Custom
+      commercialRights: true,
+      teamCollaboration: true,
+      apiAccess: true,
+      unityUnrealIntegration: true,
+      supportLevel: 'Dedicated',
     features: [
-      'Generate up to 100 skyboxes',
-      'Everything in Pro',
-      'Dedicated support',
-      'Custom integration',
-      'SLA guarantees',
-      'Team management'
+        'Custom In3D.Ai generations',
+        'Up to 5 assets per generation',
+        'Custom max assets per month',
+        'Commercial rights',
+        'Team collaboration',
+        'API access',
+        'Unity/Unreal integration',
+        'Dedicated support'
     ],
     limits: {
-      skyboxGenerations: 100,
+        skyboxGenerations: Infinity,
       maxQuality: 'ultra',
       customStyles: true,
       apiAccess: true
     }
   }
 ];
+
+  return basePlans.map(plan => ({
+    id: plan.id,
+    name: plan.name,
+    price: billingCycle === 'monthly' ? plan.monthlyPrice : plan.yearlyPrice,
+    billingCycle,
+    features: plan.features,
+    limits: plan.limits,
+    monthlyIn3DGenerations: plan.monthlyIn3DGenerations,
+    assetsPerGeneration: plan.assetsPerGeneration,
+    maxAssetsPerMonth: plan.maxAssetsPerMonth,
+    commercialRights: plan.commercialRights,
+    teamCollaboration: plan.teamCollaboration,
+    apiAccess: plan.apiAccess,
+    unityUnrealIntegration: plan.unityUnrealIntegration,
+    supportLevel: plan.supportLevel
+  }));
+};
+
+// Export default monthly plans for backward compatibility
+export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = getSubscriptionPlans('monthly');
 
 /**
  * Creates a default subscription document for a new user

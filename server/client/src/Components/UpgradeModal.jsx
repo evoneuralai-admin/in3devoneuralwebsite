@@ -4,7 +4,8 @@ import { createPortal } from 'react-dom';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { razorpayService } from '../services/razorpayService';
-import { SUBSCRIPTION_PLANS, subscriptionService } from '../services/subscriptionService';
+import { subscriptionService } from '../services/subscriptionService';
+import { PricingTiers } from './PricingTiers';
 
 const UpgradeModal = ({ isOpen, onClose, currentPlan, onSubscriptionUpdate }) => {
   const { user } = useAuth();
@@ -130,82 +131,10 @@ const UpgradeModal = ({ isOpen, onClose, currentPlan, onSubscriptionUpdate }) =>
                   <p className="text-gray-300">Select the plan that best fits your needs</p>
                 </div>
 
-                {/* Plans Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  {SUBSCRIPTION_PLANS.map((plan) => (
-                    <div
-                      key={plan.id}
-                      className={`relative bg-gray-800/50 rounded-lg p-6 border transition-all duration-200 hover:transform hover:-translate-y-1 
-                        ${currentPlan === plan.id 
-                          ? 'border-blue-500/50 bg-blue-900/10' 
-                          : 'border-gray-700/50 hover:border-gray-600/50'}`}
-                    >
-                      {currentPlan === plan.id && (
-                        <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                          <span className="bg-blue-500/80 text-white text-xs px-3 py-1 rounded-full">
-                            Current Plan
-                          </span>
-                        </div>
-                      )}
-
-                      <div className="text-center">
-                        <h3 className="text-xl font-bold text-white mb-2">{plan.name}</h3>
-                        <div className="text-3xl font-bold text-white mb-4">
-                          ₹{plan.price}
-                          <span className="text-sm text-gray-400">/{plan.billingCycle}</span>
-                        </div>
-
-                        <div className="mb-6 text-sm text-gray-300">
-                          {plan.limits.skyboxGenerations === Infinity 
-                            ? 'Unlimited In3D.Ai generations'
-                            : `${plan.limits.skyboxGenerations} In3D.Ai generations per month`
-                          }
-                        </div>
-
-                        <ul className="text-sm text-gray-300 space-y-3 mb-6 text-left">
-                          {plan.features.map((feature, index) => (
-                            <li key={index} className="flex items-center">
-                              <svg
-                                className="w-4 h-4 text-green-400 mr-2 flex-shrink-0"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M5 13l4 4L19 7"
-                                />
-                              </svg>
-                              <span>{feature}</span>
-                            </li>
-                          ))}
-                        </ul>
-
-                        <button
-                          onClick={() => handlePlanSelect(plan.id)}
-                          disabled={currentPlan === plan.id}
-                          className={`
-                            w-full px-4 py-3 rounded-lg font-medium transition-all duration-200
-                            ${currentPlan === plan.id
-                              ? 'bg-gray-700/50 text-gray-400 cursor-not-allowed'
-                              : 'bg-gradient-to-r from-purple-500/50 to-pink-600/50 hover:from-purple-600/60 hover:to-pink-700/60 text-white transform hover:-translate-y-0.5 active:translate-y-0 border border-purple-500/30'
-                            }
-                          `}
-                        >
-                          {currentPlan === plan.id ? 'Current Plan' : 'Select Plan'}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Footer */}
-                <div className="mt-8 text-center text-sm text-gray-400">
-                  <p>All plans include access to our community and basic support</p>
-                  <p className="mt-2">Need help choosing? Contact our support team</p>
-                </div>
+                {/* Pricing Tiers with Monthly/Yearly Toggle */}
+                <PricingTiers
+                  currentSubscription={{ planId: currentPlan }}
+                />
               </div>
             </motion.div>
           </div>

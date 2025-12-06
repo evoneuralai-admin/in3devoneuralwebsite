@@ -171,13 +171,13 @@ const Header = () => {
 
   return (
     <>
-      <header className="fixed top-0 left-0 right-0 z-50">
-        <div className="mx-4 mt-4">
+      <header className="fixed top-0 left-0 right-0 z-50 w-full">
+        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
           {/* Glassmorphism container - removed overflow-hidden to allow dropdown to show */}
           <nav className="
             relative
-            backdrop-blur-xl
-            bg-[#141414]/90
+            backdrop-blur-0
+            bg-[#141414]/80
             border border-[#262626]
             rounded-2xl
             shadow-[0_8px_32px_rgba(0,0,0,0.4)]

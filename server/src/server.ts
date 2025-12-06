@@ -60,12 +60,40 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Debug endpoint to list all registered routes
+app.get('/api/routes', (req, res) => {
+  const routes: string[] = [];
+  const listRoutes = (router: any, basePath: string = '') => {
+    router.stack.forEach((layer: any) => {
+      if (layer.route) {
+        const path = basePath + layer.route.path;
+        const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
+        routes.push(`${methods} ${path}`);
+      } else if (layer.name === 'router') {
+        const newBasePath = basePath + (layer.regexp.source
+          .replace('^\\/','')
+          .replace('\\/?(?=\\/|$)','')
+          .replace(/\\\//g, '/'));
+        listRoutes(layer.handle, newBasePath);
+      }
+    });
+  };
+  
+  listRoutes(apiRouter, '/api');
+  res.json({ routes, count: routes.length });
+});
+
 // API routes (must come before static file serving)
 console.log('Mounting payment routes at /api/payment');
 app.use('/api/payment', paymentRoutes);
 
 console.log('Mounting API routes at /api');
 app.use('/api', apiRouter);
+
+// Direct email route mount for testing (backup)
+import emailRoutes from './routes/email';
+app.use('/api/email', emailRoutes);
+console.log('✅ Email routes also mounted directly at /api/email');
 
 // Serve static files from the React build (only in production)
 if (!isDevelopment) {

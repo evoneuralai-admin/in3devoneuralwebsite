@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Reset default margins and padding */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+  overflow-x: hidden;
+  position: relative;
+}
+
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
 @keyframes shimmer {
   0% {
     transform: translateX(-100%);
