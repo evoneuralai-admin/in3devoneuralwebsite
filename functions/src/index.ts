@@ -3,19 +3,13 @@
  * Handles skybox generation, status checking, and user management
  */
 
-import {setGlobalOptions} from "firebase-functions";
-import {onRequest} from "firebase-functions/https";
-import {defineSecret} from "firebase-functions/params";
+import {setGlobalOptions} from "firebase-functions/v2";
+import {onRequest} from "firebase-functions/v2/https";
 import * as admin from 'firebase-admin';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import Razorpay from 'razorpay';
-
-// Define secrets using Firebase Functions v2 params
-const razorpayKeyId = defineSecret('RAZORPAY_KEY_ID');
-const razorpayKeySecret = defineSecret('RAZORPAY_KEY_SECRET');
-const blockadeApiKey = defineSecret('BLOCKADE_API_KEY');
 
 // Global options for cost control
 setGlobalOptions({ maxInstances: 10 });
@@ -107,52 +101,39 @@ const authenticateUser = async (req: Request, res: Response, next: NextFunction)
 
 app.use(authenticateUser);
 
-// Initialize services - these will be set when the function runs with secrets
+// Initialize services
 let BLOCKADE_API_KEY = '';
 let razorpay: Razorpay | null = null;
-let servicesInitialized = false;
 
-// Function to initialize services with secrets (lazy initialization at runtime)
-// IMPORTANT: This must be called within route handlers, not middleware,
-// because Firebase Functions v2 secrets are only available in the function handler scope
-const initializeServices = () => {
-  if (servicesInitialized) return;
-  
-  try {
-    // Get Blockade API key from secret
-    // This will only work when called from within a route handler after secrets are injected
-    BLOCKADE_API_KEY = blockadeApiKey.value() || '';
-    if (BLOCKADE_API_KEY) {
-      // Clean the API key (remove any invalid characters)
-      BLOCKADE_API_KEY = BLOCKADE_API_KEY.replace(/[^\w\-]/g, '');
-      console.log('BlockadeLabs API key configured successfully');
-    } else {
-      console.warn('BLOCKADE_API_KEY not found in secrets');
-    }
-  } catch (error) {
-    console.error('Failed to configure BlockadeLabs API key:', error);
+try {
+  BLOCKADE_API_KEY = process.env.BLOCKADE_API_KEY || '';
+  if (BLOCKADE_API_KEY) {
+    // Clean the API key (remove any invalid characters)
+    BLOCKADE_API_KEY = BLOCKADE_API_KEY.replace(/[^\w\-]/g, '');
+    console.log('BlockadeLabs API key configured successfully');
+  } else {
+    console.warn('BLOCKADE_API_KEY not found in environment variables');
   }
+} catch (error) {
+  console.error('Failed to configure BlockadeLabs API key:', error);
+}
 
-  try {
-    // Get Razorpay credentials from secrets
-    const RAZORPAY_KEY_ID = razorpayKeyId.value();
-    const RAZORPAY_KEY_SECRET = razorpayKeySecret.value();
-    
-    if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
-      razorpay = new Razorpay({
-        key_id: RAZORPAY_KEY_ID,
-        key_secret: RAZORPAY_KEY_SECRET
-      });
-      console.log('Razorpay initialized successfully');
-    } else {
-      console.warn('Razorpay credentials not found in secrets');
-    }
-  } catch (error) {
-    console.error('Failed to initialize Razorpay:', error);
-  }
+try {
+  const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
+  const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
   
-  servicesInitialized = true;
-};
+  if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
+    razorpay = new Razorpay({
+      key_id: RAZORPAY_KEY_ID,
+      key_secret: RAZORPAY_KEY_SECRET
+    });
+    console.log('Razorpay initialized successfully');
+  } else {
+    console.warn('Razorpay credentials not found in environment variables');
+  }
+} catch (error) {
+  console.error('Failed to initialize Razorpay:', error);
+}
 
 // Environment check endpoint
 app.get('/env-check', (req: Request, res: Response) => {
@@ -160,31 +141,19 @@ app.get('/env-check', (req: Request, res: Response) => {
   
   console.log(`[${requestId}] Environment check requested`);
   
-  // Ensure services are initialized
-  initializeServices();
-  
-  let razorpayKeyLength = 0;
-  let razorpaySecretLength = 0;
-  try {
-    razorpayKeyLength = razorpayKeyId.value()?.length || 0;
-    razorpaySecretLength = razorpayKeySecret.value()?.length || 0;
-  } catch (error) {
-    // Secrets not accessible at this time
-  }
-  
-  res.json({
-    environment: 'production',
-    firebase: true,
-    blockadelabs: !!BLOCKADE_API_KEY,
-    razorpay: !!razorpay,
-    env_debug: {
-      blockadelabs_key_length: BLOCKADE_API_KEY?.length || 0,
-      razorpay_key_length: razorpayKeyLength,
-      razorpay_secret_length: razorpaySecretLength
-    },
-    timestamp: new Date().toISOString(),
-    requestId
-  });
+      res.json({
+      environment: 'production',
+      firebase: true,
+      blockadelabs: !!BLOCKADE_API_KEY,
+      razorpay: !!razorpay,
+      env_debug: {
+        blockadelabs_key_length: process.env.BLOCKADE_API_KEY?.length || 0,
+        razorpay_key_length: process.env.RAZORPAY_KEY_ID?.length || 0,
+        razorpay_secret_length: process.env.RAZORPAY_KEY_SECRET?.length || 0
+      },
+      timestamp: new Date().toISOString(),
+      requestId
+    });
 });
 
 // Health check endpoint
@@ -234,80 +203,43 @@ app.get('/skybox/styles', async (req: Request, res: Response) => {
           },
           requestId
         });
-      } catch (error: any) {
+      } catch (error) {
         console.error(`[${requestId}] BlockadeLabs API error:`, error);
-        console.error(`[${requestId}] BlockadeLabs error details:`, {
-          status: error.response?.status,
-          message: error.message,
-          data: error.response?.data
-        });
         // Fallback to Firebase data
       }
     }
     
     // Fallback: Get styles from Firebase
-    try {
-      const db = admin.firestore();
-      const stylesRef = db.collection('skyboxStyles');
-      const snapshot = await stylesRef
-        .orderBy('createdAt', 'desc')
-        .limit(limit)
-        .offset((page - 1) * limit)
-        .get();
-      
-      const styles = snapshot.docs.map((doc: any) => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      console.log(`[${requestId}] Successfully fetched ${styles.length} styles from Firebase`);
-      
-      if (styles.length > 0) {
-        return res.json({
-          success: true,
-          data: styles,
-          pagination: {
-            page,
-            limit,
-            total: styles.length
-          },
-          requestId
-        });
-      }
-      
-      // If no styles in Firestore, return empty array with success
-      console.log(`[${requestId}] No styles found in Firestore, returning empty array`);
-      return res.json({
-        success: true,
-        data: [],
-        pagination: {
-          page,
-          limit,
-          total: 0
-        },
-        requestId
-      });
-    } catch (firestoreError: any) {
-      console.error(`[${requestId}] Firestore error:`, firestoreError);
-      // Return empty array instead of error to allow UI to load
-      return res.json({
-        success: true,
-        data: [],
-        pagination: {
-          page,
-          limit,
-          total: 0
-        },
-        requestId,
-        warning: 'Styles could not be loaded from database'
-      });
-    }
-      } catch (error: any) {
+    const db = admin.firestore();
+    const stylesRef = db.collection('skyboxStyles');
+    const snapshot = await stylesRef
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .offset((page - 1) * limit)
+      .get();
+    
+    const styles = snapshot.docs.map((doc: any) => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    
+    console.log(`[${requestId}] Successfully fetched ${styles.length} styles from Firebase`);
+    
+    return res.json({
+      success: true,
+      data: styles,
+      pagination: {
+        page,
+        limit,
+        total: styles.length
+      },
+      requestId
+    });
+      } catch (error) {
       console.error(`[${requestId}] Error fetching skybox styles:`, error);
       return res.status(500).json({
         success: false,
         error: 'Failed to fetch skybox styles',
-        details: error.message,
         requestId
       });
     }
@@ -322,11 +254,9 @@ app.post('/skybox/generate', async (req: Request, res: Response) => {
     console.log(`[${requestId}] Skybox generation requested:`, { prompt, style_id, userId });
     
     if (!BLOCKADE_API_KEY) {
-      console.error(`[${requestId}] BLOCKADE_API_KEY is not configured`);
-      return res.status(503).json({
+      return res.status(500).json({
         success: false,
-        error: 'BlockadeLabs API key is not configured. Please set the BLOCKADE_API_KEY secret in Firebase Functions.',
-        code: 'API_KEY_NOT_CONFIGURED',
+        error: 'BlockadeLabs API not configured',
         requestId
       });
     }
@@ -503,29 +433,14 @@ app.get('/skybox/status/:generationId', async (req: Request, res: Response) => {
       data: generation,
       requestId
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error(`[${requestId}] Error checking skybox status:`, error);
     
     // Check if it's a 404 error (generation not found)
-    if (error.response?.status === 404) {
-      console.log(`[${requestId}] Generation ${generationId} not found in BlockadeLabs API`);
+    if (error instanceof Error && error.message.includes('404')) {
       return res.status(404).json({
         success: false,
         error: 'Generation not found',
-        code: 'GENERATION_NOT_FOUND',
-        message: 'The skybox generation does not exist. It may have expired or was never created. Please try generating a new skybox.',
-        requestId
-      });
-    }
-    
-    // Handle other axios errors
-    if (error.response) {
-      const { status, data } = error.response;
-      return res.status(status).json({
-        success: false,
-        error: data?.error || `BlockadeLabs API error (${status})`,
-        code: `BLOCKADE_API_ERROR_${status}`,
-        details: data?.message || error.message,
         requestId
       });
     }
@@ -533,7 +448,6 @@ app.get('/skybox/status/:generationId', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to check skybox status',
-      code: 'INTERNAL_ERROR',
       details: error instanceof Error ? error.message : 'Unknown error',
       requestId
     });
@@ -620,7 +534,7 @@ app.post('/payment/create-order', async (req: Request, res: Response) => {
     };
     
     const order = await razorpay.orders.create(options);
-
+    
     // Store order in Firebase
     const db = admin.firestore();
     await db.collection('orders').doc(order.id).set({
@@ -629,20 +543,16 @@ app.post('/payment/create-order', async (req: Request, res: Response) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       status: 'created'
     });
-
+    
     console.log(`[${requestId}] Order created:`, order.id);
-
-    // NOTE: The frontend expects `data.id` for Razorpay order_id.
-    // We also keep `order_id` for backward compatibility with any
-    // older clients or test tools that relied on that field.
+    
     return res.json({
       success: true,
       data: {
-        id: order.id,
         order_id: order.id,
         amount: order.amount,
         currency: order.currency,
-        key_id: razorpayKeyId.value()
+        key_id: process.env.RAZORPAY_KEY_ID
       },
       requestId
     });
@@ -664,8 +574,7 @@ app.post('/payment/verify', async (req: Request, res: Response) => {
   try {
     console.log(`[${requestId}] Verifying payment:`, { razorpay_order_id, razorpay_payment_id });
     
-    const secret = razorpayKeySecret.value();
-    if (!secret) {
+    if (!process.env.RAZORPAY_KEY_SECRET) {
       return res.status(500).json({
         success: false,
         error: 'Razorpay not configured',
@@ -676,7 +585,7 @@ app.post('/payment/verify', async (req: Request, res: Response) => {
     // Verify signature
     const crypto = require('crypto');
     const expectedSignature = crypto
-      .createHmac('sha256', secret)
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
     
@@ -763,7 +672,7 @@ app.post('/subscription/create', async (req: Request, res: Response) => {
       data: {
         subscription_id: subscription.id,
         status: subscription.status,
-        key_id: razorpayKeyId.value()
+        key_id: process.env.RAZORPAY_KEY_ID
       },
       requestId
     });
@@ -938,7 +847,6 @@ app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // Export the Express app as a Firebase Function v2
-// Pass the secret references to the function configuration
 export const api = onRequest({
   memory: '512MiB',
   timeoutSeconds: 60,
@@ -946,5 +854,5 @@ export const api = onRequest({
   cors: true,
   region: 'us-central1',
   invoker: 'public',
-  secrets: [razorpayKeyId, razorpayKeySecret, blockadeApiKey]
+  secrets: ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'BLOCKADE_API_KEY']
 }, app);
