@@ -32,6 +32,7 @@ import { MeshyTestPanel } from './Components/MeshyTestPanel';
 import { MeshyDebugPanel } from './Components/MeshyDebugPanel';
 import { ServiceStatusPanel } from './Components/ServiceStatusPanel';
 import SystemStatus from './screens/SystemStatus';
+import { Boxes } from './Components/ui/background-boxes';
 
 // Conditional Footer - hides on /main route
 const ConditionalFooter = () => {
@@ -187,32 +188,41 @@ const ConditionalCanvas = ({ children, backgroundSkybox }) => {
     return children;
   }
   
-  // Use background skybox image if available, otherwise use default futuristic background
-  const textureUrl = backgroundSkybox?.preview_url || backgroundSkybox?.image || 
-    "https://images.unsplash.com/photo-1451187580459-43490279c0fa?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2072&q=80";
+  // Check if backgroundSkybox is set (truthy and has content)
+  const hasBackgroundSkybox = backgroundSkybox && (backgroundSkybox.preview_url || backgroundSkybox.image);
   
   return (
     <div className="relative w-full min-h-screen bg-black">
-      {/* Three.js Background */}
-      <div className="fixed inset-0 w-full h-full">
-        <Canvas 
-          camera={{ position: [0, 0, 0.1], fov: 75 }}
-          onError={(error) => {
-            console.error('Three.js Canvas error:', error);
-          }}
-          onCreated={({ gl }) => {
-            gl.setClearColor('#000000');
-          }}
-        >
-          <BackgroundSphere textureUrl={textureUrl} />
-          <OrbitControls 
-            enableZoom={false} 
-            enablePan={false} 
-            autoRotate 
-            autoRotateSpeed={0.5} 
-          />
-        </Canvas>
-      </div>
+      {hasBackgroundSkybox ? (
+        // Three.js Background - when skybox is generated
+        <div className="fixed inset-0 w-full h-full">
+          <Canvas 
+            camera={{ position: [0, 0, 0.1], fov: 75 }}
+            onError={(error) => {
+              console.error('Three.js Canvas error:', error);
+            }}
+            onCreated={({ gl }) => {
+              gl.setClearColor('#000000');
+            }}
+          >
+            <BackgroundSphere textureUrl={backgroundSkybox.preview_url || backgroundSkybox.image} />
+            <OrbitControls 
+              enableZoom={false} 
+              enablePan={false} 
+              autoRotate 
+              autoRotateSpeed={0.5} 
+            />
+          </Canvas>
+        </div>
+      ) : (
+        // Background Boxes - when no generation style is applied
+        <div className="fixed inset-0 w-full h-full overflow-hidden bg-slate-900">
+          <div className="absolute inset-0 w-full h-full pointer-events-auto z-10">
+            <Boxes />
+          </div>
+          <div className="absolute inset-0 w-full h-full bg-slate-900 [mask-image:radial-gradient(transparent,white)] pointer-events-none z-20" />
+        </div>
+      )}
       {children}
     </div>
   );

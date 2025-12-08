@@ -23,7 +23,15 @@ export const PricingTiers: React.FC<PricingTiersProps> = ({ currentSubscription 
       return;
     }
 
-    console.log('handleSelectPlan called with planId:', planId);
+    if (planId === 'enterprise') {
+      toast('Please contact us for Enterprise plan pricing', {
+        icon: 'ℹ️',
+        duration: 4000
+      });
+      return;
+    }
+
+    console.log('handleSelectPlan called with planId:', planId, 'billingCycle:', billingCycle);
     console.log('Current user:', user);
 
     if (!user || !user.email) {
@@ -33,17 +41,33 @@ export const PricingTiers: React.FC<PricingTiersProps> = ({ currentSubscription 
     }
 
     try {
-      console.log('Attempting to initialize payment...');
-      await razorpayService.initializePayment(planId, user.email, user.uid);
-      console.log('Payment initialization successful');
-      toast.success('Payment successful! Your plan will be updated shortly.');
+      console.log('Attempting to initialize subscription...');
+      const loadingToast = toast.loading('Initializing subscription...');
+      
+      await razorpayService.initializeSubscription(
+        planId,
+        user.email,
+        user.uid,
+        billingCycle,
+        user.displayName || undefined,
+        undefined // customerContact - can be added if available
+      );
+      
+      toast.dismiss(loadingToast);
+      console.log('Subscription initialization successful');
+      toast.success('Subscription created successfully! Your plan will be activated shortly.');
     } catch (error) {
-      console.error('Payment error details:', error);
-      if (error instanceof Error && error.message === 'Payment cancelled') {
-        toast.error('Payment was cancelled');
+      console.error('Subscription error details:', error);
+      if (error instanceof Error) {
+        if (error.message.includes('cancelled')) {
+          toast.error('Subscription was cancelled');
+        } else if (error.message.includes('not configured')) {
+          toast.error('Subscription plans are being set up. Please try again later or contact support.');
+        } else {
+          toast.error(error.message || 'Failed to process subscription. Please try again.');
+        }
       } else {
-        console.error('Payment error:', error);
-        toast.error('Failed to process payment. Please try again.');
+        toast.error('Failed to process subscription. Please try again.');
       }
     }
   };

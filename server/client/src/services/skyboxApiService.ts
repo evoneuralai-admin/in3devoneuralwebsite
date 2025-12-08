@@ -2,11 +2,18 @@ import api from '../config/axios';
 import type { SkyboxStatusResponse } from '../types/skybox';
 
 export const skyboxApiService = {
-  // Get available skybox styles
-  async getStyles(page: number = 1, limit: number = 20) {
+  // Get available skybox styles with retry logic
+  async getStyles(page: number = 1, limit: number = 20, retryCount: number = 0): Promise<any> {
+    const maxRetries = 2;
+    
     try {
-      console.log('🌅 Fetching skybox styles from API...', { page, limit });
-      const response = await api.get(`/skybox/styles?page=${page}&limit=${limit}`);
+      console.log('🌅 Fetching skybox styles from API...', { page, limit, retryCount, baseURL: api.defaults.baseURL });
+      const response = await api.get(`/skybox/styles?page=${page}&limit=${limit}`, {
+        timeout: 10000, // 10 second timeout
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
       
       console.log('✅ Skybox styles API response:', {
         success: response.data?.success,
@@ -51,8 +58,18 @@ export const skyboxApiService = {
         statusText: error.response?.statusText,
         data: error.response?.data,
         message: error.message,
-        url: error.config?.url
+        url: error.config?.url,
+        baseURL: error.config?.baseURL,
+        code: error.code,
+        retryCount
       });
+      
+      // Retry logic for network errors
+      if (!error.response && retryCount < maxRetries) {
+        console.log(`🔄 Retrying skybox styles fetch (attempt ${retryCount + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
+        return this.getStyles(page, limit, retryCount + 1);
+      }
       
       // Handle specific errors
       if (error.response?.status === 403) {
@@ -63,7 +80,11 @@ export const skyboxApiService = {
       } else if (error.response?.status === 503) {
         throw new Error('Skybox service is temporarily unavailable. Please try again later.');
       } else if (!error.response) {
-        // Network error
+        // Network error - provide more helpful message
+        const isPreviewEnv = typeof window !== 'undefined' && window.location.hostname.includes('--');
+        if (isPreviewEnv) {
+          console.warn('⚠️ Preview environment detected - API might be unreachable');
+        }
         throw new Error('Network error. Please check your internet connection and API configuration.');
       }
       

@@ -1,6 +1,6 @@
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { AnimatePresence, motion } from 'framer-motion';
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,24 +20,113 @@ const History = ({ setBackgroundSkybox }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  // Reusable thumbnail image component with proxy fallback
+  const ThumbnailImage = ({ src, alt, className }) => {
+    const [imageSrc, setImageSrc] = React.useState(src);
+    const [hasError, setHasError] = React.useState(false);
+    
+    // Helper to check if URL is a 3D model file
+    const is3DModelUrl = (url) => {
+      if (!url || typeof url !== 'string') return false;
+      const urlLower = url.toLowerCase();
+      return urlLower.includes('.glb') || 
+             urlLower.includes('.gltf') || 
+             urlLower.includes('.fbx') || 
+             urlLower.includes('.obj') || 
+             urlLower.includes('.usdz') ||
+             urlLower.includes('model.glb');
+    };
+    
+    // Helper to check if URL is a video file
+    const isVideoUrl = (url) => {
+      if (!url || typeof url !== 'string') return false;
+      const urlLower = url.toLowerCase();
+      return urlLower.includes('.mp4') || 
+             urlLower.includes('output.mp4') || 
+             urlLower.includes('video');
+    };
+    
+    React.useEffect(() => {
+      // Don't try to load 3D model URLs as images
+      if (is3DModelUrl(src)) {
+        console.warn('⚠️ Thumbnail: Skipping 3D model URL (cannot display as image):', src);
+        setHasError(true);
+        return;
+      }
+      
+      setImageSrc(src);
+      setHasError(false);
+    }, [src]);
+    
+    const handleError = async (e) => {
+      if (hasError) return; // Already tried proxy
+      
+      // Don't try proxy for video URLs or 3D model URLs
+      if (isVideoUrl(src) || is3DModelUrl(src)) {
+        console.warn('⚠️ Thumbnail: Skipping proxy for non-image URL:', src);
+        setHasError(true);
+        e.target.style.display = 'none';
+        if (e.target.nextSibling) {
+          e.target.nextSibling.style.display = 'flex';
+        }
+        return;
+      }
+      
+      // Try proxy fallback
+      try {
+        const { getApiBaseUrl } = await import('../utils/apiConfig');
+        const proxyUrl = `${getApiBaseUrl()}/proxy-asset?url=${encodeURIComponent(src)}`;
+        console.log('🔄 Thumbnail: Trying proxy URL for:', src);
+        setImageSrc(proxyUrl);
+        setHasError(false);
+      } catch (err) {
+        console.error('❌ Thumbnail: Failed to get proxy URL:', err);
+        setHasError(true);
+        e.target.style.display = 'none';
+        if (e.target.nextSibling) {
+          e.target.nextSibling.style.display = 'flex';
+        }
+      }
+    };
+    
+    if (hasError && imageSrc === src) {
+      // If direct failed and we're still on direct, hide image
+      return null;
+    }
+    
+    return (
+      <img
+        src={imageSrc}
+        alt={alt}
+        className={className}
+        onError={handleError}
+        crossOrigin="anonymous"
+      />
+    );
+  };
+
   useEffect(() => {
     if (!user?.uid) {
       console.log('⚠️ History: No user ID, skipping query');
       setLoading(false);
+      setHistory([]);
       return;
     }
 
     console.log('🔍 History: Starting to load history for user:', user.uid);
     console.log('🔍 History: User object:', { uid: user.uid, email: user.email });
     console.log('🔍 History: Firestore db instance:', db ? 'Available' : 'Missing');
-    setLoading(true);
     
     if (!db) {
       console.error('❌ History: Firestore db is not available!');
       setError('Firestore database is not initialized. Please refresh the page.');
       setLoading(false);
+      setHistory([]);
       return;
     }
+
+    setLoading(true);
+    setError(null);
     
     // Query both skyboxes and unified_jobs collections
     const skyboxesRef = collection(db, 'skyboxes');
@@ -65,24 +154,85 @@ const History = ({ setBackgroundSkybox }) => {
     let jobsUnsubscribe;
     let skyboxData = [];
     let jobsData = [];
+    let hasProcessed = false;
+    let processTimeout = null;
+    let skyboxQueryComplete = false;
+    let jobsQueryComplete = false;
+    
+    // Fallback timeout to ensure we process data even if queries hang
+    const fallbackTimeout = setTimeout(() => {
+      if (!hasProcessed) {
+        console.warn('⚠️ History: Fallback timeout reached, processing available data');
+        processAndMergeData();
+      }
+    }, 10000); // 10 second fallback
 
     const processAndMergeData = () => {
       try {
-        const allItems = [...skyboxData, ...jobsData];
-        
-        // Always sort by createdAt client-side (most recent first)
-        allItems.sort((a, b) => {
-          const aTime = a.created_at?.toDate ? a.created_at.toDate().getTime() : new Date(a.created_at || 0).getTime();
-          const bTime = b.created_at?.toDate ? b.created_at.toDate().getTime() : new Date(b.created_at || 0).getTime();
-          return bTime - aTime; // Descending order (newest first)
-        });
+        // Clear any pending timeout
+        if (processTimeout) {
+          clearTimeout(processTimeout);
+        }
 
-        console.log(`✅ History: Processed ${allItems.length} items (${skyboxData.length} skyboxes, ${jobsData.length} jobs), sorted by createdAt`);
-        setHistory(allItems);
-        setLoading(false);
-        setError(null);
+        // Debounce processing to avoid multiple rapid updates
+        processTimeout = setTimeout(() => {
+          try {
+            const allItems = [...skyboxData, ...jobsData];
+            
+            // Filter out invalid items
+            const validItems = allItems.filter(item => {
+              if (!item || !item.id) return false;
+              
+              // Check for file_url (skybox image)
+              const hasFileUrl = !!item.file_url;
+              
+              // Check for meshUrl (3D model URL)
+              const hasMeshUrl = !!item.jobData?.meshUrl;
+              
+              // Check for model_urls in meshResult (3D model URLs from Meshy API)
+              const hasModelUrls = !!(item.jobData?.model_urls || item.jobData?.meshResult?.model_urls);
+              
+              // Check for skybox URL in jobData
+              const hasSkyboxUrl = !!(item.jobData?.skyboxUrl || item.jobData?.skyboxResult?.fileUrl);
+              
+              // Item is valid if it has at least one of these
+              const isValid = hasFileUrl || hasMeshUrl || hasModelUrls || hasSkyboxUrl;
+              
+              if (!isValid) {
+                console.warn(`⚠️ History: Item ${item.id} has no valid URLs (file_url, meshUrl, model_urls, or skyboxUrl), skipping`);
+                return false;
+              }
+              
+              return true;
+            });
+            
+            // Always sort by createdAt client-side (most recent first)
+            validItems.sort((a, b) => {
+              try {
+                const aTime = a.created_at?.toDate ? a.created_at.toDate().getTime() : 
+                             (a.created_at ? new Date(a.created_at).getTime() : 0);
+                const bTime = b.created_at?.toDate ? b.created_at.toDate().getTime() : 
+                             (b.created_at ? new Date(b.created_at).getTime() : 0);
+                return bTime - aTime; // Descending order (newest first)
+              } catch (sortErr) {
+                console.warn('⚠️ History: Error sorting items, using default order:', sortErr);
+                return 0;
+              }
+            });
+
+            console.log(`✅ History: Processed ${validItems.length} items (${skyboxData.length} skyboxes, ${jobsData.length} jobs), sorted by createdAt`);
+            setHistory(validItems);
+            setLoading(false);
+            setError(null);
+            hasProcessed = true;
+          } catch (err) {
+            console.error("❌ History: Error processing merged data:", err);
+            setError("Error processing history data: " + err.message);
+            setLoading(false);
+          }
+        }, 100); // 100ms debounce
       } catch (err) {
-        console.error("❌ History: Error processing merged data:", err);
+        console.error("❌ History: Error in processAndMergeData:", err);
         setError("Error processing history data: " + err.message);
         setLoading(false);
       }
@@ -93,53 +243,99 @@ const History = ({ setBackgroundSkybox }) => {
       skyboxQuery,
       (snapshot) => {
         try {
+          skyboxQueryComplete = true;
+          
+          if (snapshot.empty) {
+            console.log('📦 History: No skybox documents found');
+            skyboxData = [];
+            processAndMergeData();
+            return;
+          }
+
           console.log(`📦 History: Received ${snapshot.docs.length} skybox documents from Firestore`);
           
           skyboxData = snapshot.docs.map(doc => {
-            const data = doc.data();
-            console.log(`📄 History: Processing skybox document ${doc.id}:`, {
-              hasUserId: !!data.userId,
-              userId: data.userId,
-              matchesCurrentUser: data.userId === user.uid,
-              hasCreatedAt: !!data.createdAt,
-              hasImageUrl: !!data.imageUrl,
-              hasVariations: !!data.variations,
-              variationsCount: data.variations?.length || 0,
-              status: data.status
-            });
-            
-            const baseSkybox = {
-              id: doc.id,
-              file_url: data.imageUrl || data.image || data.file_url || data.skyboxUrl,
-              title: data.title || data.promptUsed || data.prompt || 'Untitled Generation',
-              prompt: data.promptUsed || data.prompt || '',
-              created_at: data.createdAt,
-              status: data.status || 'completed',
-              metadata: data.metadata || {},
-              isVariation: false,
-              source: 'skyboxes'
-            };
-
-            // If there are variations, include them in the same object
-            if (data.variations && Array.isArray(data.variations) && data.variations.length > 0) {
-              baseSkybox.variations = data.variations.map((variation, index) => ({
-                id: `${doc.id}_variation_${index}`,
-                file_url: variation.image || variation.image_jpg || variation.file_url,
-                title: variation.title || `${baseSkybox.title} (Variation ${index + 1})`,
-                prompt: variation.prompt || baseSkybox.prompt,
-                created_at: data.createdAt,
-                status: variation.status || data.status || 'completed',
+            try {
+              const data = doc.data();
+              
+              // Validate required fields
+              if (!data.userId || data.userId !== user.uid) {
+                console.warn(`⚠️ History: Skipping skybox ${doc.id} - userId mismatch`);
+                return null;
+              }
+              
+              // Get file URL with multiple fallbacks
+              const fileUrl = data.imageUrl || 
+                            data.image || 
+                            data.file_url || 
+                            data.skyboxUrl || 
+                            data.preview_url ||
+                            data.fileUrl ||
+                            data.downloadUrl;
+              
+              // Validate we have at least a title or prompt
+              const title = data.title || data.promptUsed || data.prompt || 'Untitled Generation';
+              const prompt = data.promptUsed || data.prompt || '';
+              
+              // Get created_at with multiple fallbacks
+              let createdAt = null;
+              if (data.createdAt) {
+                createdAt = data.createdAt;
+              } else if (data.created_at) {
+                createdAt = data.created_at;
+              } else if (doc.metadata?.createTime) {
+                createdAt = doc.metadata.createTime;
+              } else {
+                // Fallback to current time if no timestamp
+                createdAt = new Date();
+              }
+              
+              const baseSkybox = {
+                id: doc.id,
+                file_url: fileUrl,
+                title: title,
+                prompt: prompt,
+                created_at: createdAt,
+                status: data.status || 'completed',
                 metadata: data.metadata || {},
-                isVariation: true,
-                parentId: doc.id,
-                variationIndex: index
-              }));
-            } else {
-              baseSkybox.variations = [];
-            }
+                isVariation: false,
+                source: 'skyboxes'
+              };
 
-            return baseSkybox;
-          });
+              // If there are variations, include them in the same object
+              if (data.variations && Array.isArray(data.variations) && data.variations.length > 0) {
+                baseSkybox.variations = data.variations
+                  .filter(v => v !== null && v !== undefined) // Filter out null/undefined variations
+                  .map((variation, index) => {
+                    const variationFileUrl = variation.image || 
+                                           variation.image_jpg || 
+                                           variation.file_url || 
+                                           variation.preview_url ||
+                                           variation.fileUrl;
+                    return {
+                      id: `${doc.id}_variation_${index}`,
+                      file_url: variationFileUrl,
+                      title: variation.title || `${baseSkybox.title} (Variation ${index + 1})`,
+                      prompt: variation.prompt || baseSkybox.prompt,
+                      created_at: createdAt,
+                      status: variation.status || data.status || 'completed',
+                      metadata: data.metadata || {},
+                      isVariation: true,
+                      parentId: doc.id,
+                      variationIndex: index,
+                      source: 'skyboxes'
+                    };
+                  });
+              } else {
+                baseSkybox.variations = [];
+              }
+
+              return baseSkybox;
+            } catch (docErr) {
+              console.error(`❌ History: Error processing skybox document ${doc.id}:`, docErr);
+              return null;
+            }
+          }).filter(item => item !== null);
 
           processAndMergeData();
         } catch (err) {
@@ -152,7 +348,28 @@ const History = ({ setBackgroundSkybox }) => {
         console.error("❌ History: Error in skybox listener:", err);
         console.error("   Error code:", err.code);
         console.error("   Error message:", err.message);
-        // Don't set error here, let jobs query handle it
+        console.error("   Error details:", err);
+        
+        // Handle specific error codes
+        let errorMessage = 'Failed to load skybox history';
+        if (err.code === 'permission-denied') {
+          errorMessage = "Permission denied. Please check your authentication and refresh the page.";
+        } else if (err.code === 'unavailable') {
+          errorMessage = "Firestore is temporarily unavailable. Please check your internet connection and try again.";
+        } else if (err.code === 'unauthenticated') {
+          errorMessage = "Please sign in to view your history.";
+        } else if (err.message) {
+          errorMessage = `Failed to load skybox history: ${err.message}`;
+        }
+        
+        // Set error but don't block jobs query - continue with jobs data
+        skyboxQueryComplete = true;
+        skyboxData = []; // Reset skybox data on error
+        processAndMergeData(); // Process with empty skybox data
+        // Only set error if jobs query also fails
+        if (!jobsQueryComplete) {
+          setError(errorMessage);
+        }
       }
     );
 
@@ -161,100 +378,225 @@ const History = ({ setBackgroundSkybox }) => {
       jobsQuery,
       (snapshot) => {
         try {
+          jobsQueryComplete = true;
+          
+          if (snapshot.empty) {
+            console.log('📦 History: No job documents found');
+            jobsData = [];
+            processAndMergeData();
+            return;
+          }
+
           console.log(`📦 History: Received ${snapshot.docs.length} job documents from Firestore`);
           
           jobsData = snapshot.docs.map(doc => {
-            const data = doc.data();
-            
-            // Normalize errors field - handle both array and object formats for backward compatibility
-            let errors = [];
-            if (data.errors) {
-              if (Array.isArray(data.errors)) {
-                errors = data.errors;
-              } else if (typeof data.errors === 'object') {
-                // Handle legacy object format: { id, prompt, status }
-                // Convert to array of error messages
-                if (data.errors.status && data.errors.status !== 'completed') {
-                  errors = [`Status: ${data.errors.status}`];
-                }
-                if (data.errors.prompt) {
-                  errors.push(`Prompt: ${data.errors.prompt}`);
-                }
-                console.warn(`⚠️ History: Found legacy errors object format in job ${doc.id}, converting to array`);
+            try {
+              const data = doc.data();
+              
+              // Validate required fields
+              if (!data.userId || data.userId !== user.uid) {
+                console.warn(`⚠️ History: Skipping job ${doc.id} - userId mismatch`);
+                return null;
               }
-            }
-            
-            console.log(`📄 History: Processing job document ${doc.id}:`, {
-              hasUserId: !!data.userId,
-              userId: data.userId,
-              matchesCurrentUser: data.userId === user.uid,
-              hasCreatedAt: !!data.createdAt,
-              hasSkyboxUrl: !!data.skyboxUrl,
-              hasMeshUrl: !!data.meshUrl,
-              status: data.status,
-              errorsCount: errors.length
-            });
-            
-            // Convert job to history item format
-            const jobItem = {
-              id: doc.id,
-              file_url: data.skyboxUrl || data.skyboxResult?.fileUrl || data.skyboxResult?.downloadUrl || data.meshResult?.previewUrl || data.meshResult?.downloadUrl,
-              title: data.prompt || 'Untitled Generation',
-              prompt: data.prompt || '',
-              created_at: data.createdAt,
-              status: data.status || 'pending',
-              metadata: {
-                ...data.metadata,
-                jobId: doc.id,
-                hasSkybox: !!data.skyboxUrl || !!data.skyboxResult,
-                hasMesh: !!data.meshUrl || !!data.meshResult,
-                errors: errors
-              },
-              isVariation: false,
-              source: 'unified_jobs',
-              // Include full job data for potential future use
-              jobData: {
-                skyboxUrl: data.skyboxUrl,
-                meshUrl: data.meshUrl,
-                skyboxResult: data.skyboxResult,
-                meshResult: data.meshResult,
-                // Include model_urls if available (from Meshy API response)
-                model_urls: data.meshResult?.model_urls || data.model_urls
+              
+              // Normalize errors field - handle both array and object formats for backward compatibility
+              let errors = [];
+              if (data.errors) {
+                if (Array.isArray(data.errors)) {
+                  errors = data.errors;
+                } else if (typeof data.errors === 'object') {
+                  // Handle legacy object format: { id, prompt, status }
+                  // Convert to array of error messages
+                  if (data.errors.status && data.errors.status !== 'completed') {
+                    errors = [`Status: ${data.errors.status}`];
+                  }
+                  if (data.errors.prompt) {
+                    errors.push(`Prompt: ${data.errors.prompt}`);
+                  }
+                }
               }
-            };
-
-            // If job has both skybox and mesh, create variations
-            if (data.skyboxUrl && data.meshUrl) {
-              jobItem.variations = [
-                {
-                  id: `${doc.id}_skybox`,
-                  file_url: data.skyboxUrl,
-                  title: `${jobItem.title} (Skybox)`,
-                  prompt: jobItem.prompt,
-                  created_at: data.createdAt,
-                  status: data.skyboxResult?.status || data.status || 'completed',
-                  isVariation: true,
-                  parentId: doc.id,
-                  variationIndex: 0
+              
+              // Helper to check if URL is a video file
+              const isVideoUrl = (url) => {
+                if (!url || typeof url !== 'string') return false;
+                const urlLower = url.toLowerCase();
+                return urlLower.includes('.mp4') || 
+                       urlLower.includes('output.mp4') || 
+                       urlLower.includes('/output/output.mp4') ||
+                       urlLower.includes('video');
+              };
+              
+              // Helper to check if URL is a 3D model file
+              const is3DModelUrl = (url) => {
+                if (!url || typeof url !== 'string') return false;
+                if (isVideoUrl(url)) return false;
+                const urlLower = url.toLowerCase();
+                return urlLower.includes('.glb') || 
+                       urlLower.includes('.gltf') || 
+                       urlLower.includes('.fbx') || 
+                       urlLower.includes('.obj') || 
+                       urlLower.includes('.usdz') ||
+                       urlLower.includes('model.glb');
+              };
+              
+              // Get file URL with multiple fallbacks (but exclude video URLs and 3D model URLs)
+              // Prioritize skybox URLs, then image URLs, but never video URLs or 3D model URLs
+              let fileUrl = data.skyboxUrl || 
+                           data.skyboxResult?.fileUrl || 
+                           data.skyboxResult?.downloadUrl || 
+                           data.skyboxResult?.preview_url ||
+                           data.imageUrl ||
+                           data.file_url ||
+                           data.fileUrl;
+              
+              // Filter out video and 3D model URLs
+              if (fileUrl && (isVideoUrl(fileUrl) || is3DModelUrl(fileUrl))) {
+                fileUrl = null;
+              }
+              
+              // Only use meshResult URLs if they're not videos or 3D models (meshResult might have video previews or GLB URLs)
+              if (!fileUrl) {
+                const meshPreviewUrl = data.meshResult?.previewUrl;
+                const meshDownloadUrl = data.meshResult?.downloadUrl;
+                
+                // Use mesh URLs only if they're not videos or 3D models
+                if (meshPreviewUrl && !isVideoUrl(meshPreviewUrl) && !is3DModelUrl(meshPreviewUrl)) {
+                  fileUrl = meshPreviewUrl;
+                } else if (meshDownloadUrl && !isVideoUrl(meshDownloadUrl) && !is3DModelUrl(meshDownloadUrl)) {
+                  fileUrl = meshDownloadUrl;
+                } else if (data.meshResult?.preview_url && !isVideoUrl(data.meshResult.preview_url) && !is3DModelUrl(data.meshResult.preview_url)) {
+                  fileUrl = data.meshResult.preview_url;
+                } else {
+                  // If all URLs are videos or 3D models, set to null (we'll use model_urls for 3D preview)
+                  fileUrl = null;
+                }
+              }
+              
+              // Log if we found a video or 3D model URL and rejected it
+              if (data.meshResult?.downloadUrl) {
+                if (isVideoUrl(data.meshResult.downloadUrl)) {
+                  console.log(`ℹ️ History: Item ${doc.id} has video URL in meshResult.downloadUrl, will use model_urls for 3D preview instead`);
+                } else if (is3DModelUrl(data.meshResult.downloadUrl)) {
+                  console.log(`ℹ️ History: Item ${doc.id} has 3D model URL in meshResult.downloadUrl, will use model_urls for 3D preview instead`);
+                }
+              }
+              
+              // Validate we have at least a title or prompt
+              const title = data.prompt || data.title || 'Untitled Generation';
+              const prompt = data.prompt || '';
+              
+              // Get created_at with multiple fallbacks
+              let createdAt = null;
+              if (data.createdAt) {
+                createdAt = data.createdAt;
+              } else if (data.created_at) {
+                createdAt = data.created_at;
+              } else if (doc.metadata?.createTime) {
+                createdAt = doc.metadata.createTime;
+              } else {
+                // Fallback to current time if no timestamp
+                createdAt = new Date();
+              }
+              
+              // Extract model_urls from multiple possible locations
+              const extractedModelUrls = data.meshResult?.model_urls || 
+                                        data.model_urls || 
+                                        (data.meshResult && typeof data.meshResult === 'object' && 'model_urls' in data.meshResult ? data.meshResult.model_urls : null) ||
+                                        null;
+              
+              // Debug logging for model_urls extraction
+              if (data.meshResult && !extractedModelUrls) {
+                console.log(`🔍 History: Item ${doc.id} has meshResult but no model_urls found:`, {
+                  hasMeshResult: !!data.meshResult,
+                  meshResultKeys: data.meshResult ? Object.keys(data.meshResult) : [],
+                  meshResultType: typeof data.meshResult
+                });
+              } else if (extractedModelUrls) {
+                console.log(`✅ History: Item ${doc.id} has model_urls:`, {
+                  hasGlb: !!extractedModelUrls.glb,
+                  hasFbx: !!extractedModelUrls.fbx,
+                  hasObj: !!extractedModelUrls.obj,
+                  hasUsdz: !!extractedModelUrls.usdz
+                });
+              }
+              
+              // Convert job to history item format
+              const jobItem = {
+                id: doc.id,
+                file_url: fileUrl,
+                title: title,
+                prompt: prompt,
+                created_at: createdAt,
+                status: data.status || 'pending',
+                metadata: {
+                  ...(data.metadata || {}),
+                  jobId: doc.id,
+                  hasSkybox: !!(data.skyboxUrl || data.skyboxResult),
+                  hasMesh: !!(data.meshUrl || data.meshResult),
+                  errors: errors
                 },
-                {
-                  id: `${doc.id}_mesh`,
-                  file_url: data.meshResult?.previewUrl || data.meshResult?.downloadUrl || data.meshUrl,
-                  title: `${jobItem.title} (3D Asset)`,
-                  prompt: jobItem.prompt,
-                  created_at: data.createdAt,
-                  status: data.meshResult?.status || data.status || 'completed',
-                  isVariation: true,
-                  parentId: doc.id,
-                  variationIndex: 1
+                isVariation: false,
+                source: 'unified_jobs',
+                // Include full job data for potential future use
+                jobData: {
+                  skyboxUrl: data.skyboxUrl || data.skyboxResult?.fileUrl || data.skyboxResult?.downloadUrl,
+                  meshUrl: data.meshUrl,
+                  skyboxResult: data.skyboxResult || null,
+                  meshResult: data.meshResult || null,
+                  // Include model_urls if available (from Meshy API response)
+                  model_urls: extractedModelUrls
                 }
-              ];
-            } else {
-              jobItem.variations = [];
-            }
+              };
 
-            return jobItem;
-          });
+              // If job has both skybox and mesh, create variations
+              if ((data.skyboxUrl || data.skyboxResult) && (data.meshUrl || data.meshResult)) {
+                const skyboxVariationUrl = data.skyboxUrl || 
+                                          data.skyboxResult?.fileUrl || 
+                                          data.skyboxResult?.downloadUrl ||
+                                          data.skyboxResult?.preview_url;
+                const meshVariationUrl = data.meshResult?.previewUrl || 
+                                       data.meshResult?.downloadUrl || 
+                                       data.meshUrl ||
+                                       data.meshResult?.preview_url;
+                
+                jobItem.variations = [
+                  {
+                    id: `${doc.id}_skybox`,
+                    file_url: skyboxVariationUrl,
+                    title: `${jobItem.title} (Skybox)`,
+                    prompt: jobItem.prompt,
+                    created_at: createdAt,
+                    status: data.skyboxResult?.status || data.status || 'completed',
+                    isVariation: true,
+                    parentId: doc.id,
+                    variationIndex: 0,
+                    jobData: jobItem.jobData,
+                    source: 'unified_jobs'
+                  },
+                  {
+                    id: `${doc.id}_mesh`,
+                    file_url: meshVariationUrl,
+                    title: `${jobItem.title} (3D Asset)`,
+                    prompt: jobItem.prompt,
+                    created_at: createdAt,
+                    status: data.meshResult?.status || data.status || 'completed',
+                    isVariation: true,
+                    parentId: doc.id,
+                    variationIndex: 1,
+                    jobData: jobItem.jobData,
+                    source: 'unified_jobs'
+                  }
+                ].filter(v => v.file_url); // Only include variations with file URLs
+              } else {
+                jobItem.variations = [];
+              }
+
+              return jobItem;
+            } catch (docErr) {
+              console.error(`❌ History: Error processing job document ${doc.id}:`, docErr);
+              return null;
+            }
+          }).filter(item => item !== null);
 
           processAndMergeData();
         } catch (err) {
@@ -267,14 +609,61 @@ const History = ({ setBackgroundSkybox }) => {
         console.error("❌ History: Error in jobs listener:", err);
         console.error("   Error code:", err.code);
         console.error("   Error message:", err.message);
-        setError(`Failed to load generation history: ${err.message}. Check console for details.`);
-        setLoading(false);
+        console.error("   Error details:", err);
+        
+        // Handle specific error codes
+        let errorMessage = 'Failed to load generation history';
+        if (err.code === 'permission-denied') {
+          errorMessage = "Permission denied. Please check your authentication and refresh the page.";
+        } else if (err.code === 'unavailable') {
+          errorMessage = "Firestore is temporarily unavailable. Please check your internet connection and try again.";
+        } else if (err.code === 'unauthenticated') {
+          errorMessage = "Please sign in to view your history.";
+        } else if (err.code === 'failed-precondition') {
+          errorMessage = "Database query failed. Please refresh the page.";
+        } else if (err.message) {
+          errorMessage = `Failed to load generation history: ${err.message}`;
+        }
+        
+        jobsQueryComplete = true;
+        jobsData = []; // Reset jobs data on error
+        processAndMergeData(); // Process with empty jobs data
+        // Set error message
+        setError(errorMessage);
       }
     );
 
     return () => {
-      if (skyboxUnsubscribe) skyboxUnsubscribe();
-      if (jobsUnsubscribe) jobsUnsubscribe();
+      // Cleanup: unsubscribe from listeners
+      if (skyboxUnsubscribe) {
+        try {
+          skyboxUnsubscribe();
+          console.log('🧹 History: Skybox listener unsubscribed');
+        } catch (err) {
+          console.error('❌ History: Error unsubscribing skybox listener:', err);
+        }
+      }
+      if (jobsUnsubscribe) {
+        try {
+          jobsUnsubscribe();
+          console.log('🧹 History: Jobs listener unsubscribed');
+        } catch (err) {
+          console.error('❌ History: Error unsubscribing jobs listener:', err);
+        }
+      }
+      // Clear timeouts if exist
+      if (processTimeout) {
+        clearTimeout(processTimeout);
+      }
+      if (fallbackTimeout) {
+        clearTimeout(fallbackTimeout);
+      }
+      // Reset data
+      skyboxData = [];
+      jobsData = [];
+      hasProcessed = false;
+      skyboxQueryComplete = false;
+      jobsQueryComplete = false;
     };
   }, [user?.uid]);
 
@@ -293,15 +682,41 @@ const History = ({ setBackgroundSkybox }) => {
       prompt: item.prompt,
       metadata: item.metadata
     };
-    setBackgroundSkybox(skyboxData);
+    if (setBackgroundSkybox) {
+      setBackgroundSkybox(skyboxData);
+    }
+  };
+
+  const handleItemClick = (item, e) => {
+    // Don't open preview if clicking on buttons or interactive elements
+    if (e?.target?.closest('button') || e?.target?.closest('a')) {
+      return;
+    }
+    
+    // Validate item before opening preview
+    if (!item || !item.id) {
+      console.error('❌ Cannot open preview: Invalid item');
+      return;
+    }
+    
+    // Open preview viewer when clicking on the card
+    handlePreviewClick(item, e);
   };
 
   const handlePreviewClick = (item, e) => {
-    e.stopPropagation();
+    if (e) {
+      e.stopPropagation();
+    }
+    
+    // Validate item
+    if (!item || !item.id) {
+      console.error('❌ Preview: Invalid item provided');
+      return;
+    }
     
     // Helper to check if URL is a video file
     const isVideoUrl = (url) => {
-      if (!url) return false;
+      if (!url || typeof url !== 'string') return false;
       const urlLower = url.toLowerCase();
       // Check for video extensions
       const videoExtensions = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
@@ -320,7 +735,7 @@ const History = ({ setBackgroundSkybox }) => {
     
     // Helper to check if URL is a 3D model file
     const is3DModelUrl = (url) => {
-      if (!url) return false;
+      if (!url || typeof url !== 'string') return false;
       if (isVideoUrl(url)) return false;
       const urlLower = url.toLowerCase();
       return urlLower.includes('.glb') || 
@@ -330,83 +745,161 @@ const History = ({ setBackgroundSkybox }) => {
              urlLower.includes('.usdz');
     };
     
-    // Get 3D model URL - prioritize GLB from model_urls, exclude videos
+    // Get file_url with comprehensive fallbacks
+    let fileUrl = item.file_url || 
+                  item.jobData?.skyboxUrl || 
+                  item.jobData?.skyboxResult?.fileUrl ||
+                  item.jobData?.skyboxResult?.downloadUrl ||
+                  item.jobData?.skyboxResult?.preview_url ||
+                  item.jobData?.meshResult?.previewUrl ||
+                  item.jobData?.meshResult?.downloadUrl ||
+                  null;
+    
+    // Get 3D model URL - ALWAYS prioritize GLB from model_urls first
     let meshUrl = null;
     let meshFormat = 'glb';
     
-    // First, check jobData.model_urls (direct access)
-    if (item.jobData?.model_urls) {
-      meshUrl = item.jobData.model_urls.glb || 
-                item.jobData.model_urls.fbx || 
-                item.jobData.model_urls.obj ||
-                item.jobData.model_urls.usdz;
-      if (meshUrl) {
-        meshFormat = item.jobData.model_urls.glb ? 'glb' :
-                    item.jobData.model_urls.fbx ? 'fbx' :
-                    item.jobData.model_urls.obj ? 'obj' : 'usdz';
+    // STEP 1: ALWAYS check model_urls FIRST (highest priority for GLB)
+    const modelUrls = item.jobData?.model_urls || item.jobData?.meshResult?.model_urls;
+    if (modelUrls) {
+      // Prioritize GLB, then FBX, OBJ, USDZ - but skip video URLs
+      if (modelUrls.glb && !isVideoUrl(modelUrls.glb)) {
+        meshUrl = modelUrls.glb;
+        meshFormat = 'glb';
+        console.log('✅ Found GLB in model_urls:', meshUrl);
+      } else if (modelUrls.fbx && !isVideoUrl(modelUrls.fbx)) {
+        meshUrl = modelUrls.fbx;
+        meshFormat = 'fbx';
+        console.log('✅ Found FBX in model_urls:', meshUrl);
+      } else if (modelUrls.obj && !isVideoUrl(modelUrls.obj)) {
+        meshUrl = modelUrls.obj;
+        meshFormat = 'obj';
+        console.log('✅ Found OBJ in model_urls:', meshUrl);
+      } else if (modelUrls.usdz && !isVideoUrl(modelUrls.usdz)) {
+        meshUrl = modelUrls.usdz;
+        meshFormat = 'usdz';
+        console.log('✅ Found USDZ in model_urls:', meshUrl);
       }
     }
     
-    // Check meshResult for model URLs
-    if (!meshUrl && item.jobData?.meshResult) {
-      const meshResult = item.jobData.meshResult;
-      
-      // Check if meshResult has model_urls object (from Meshy API)
-      if (meshResult.model_urls) {
-        // Prioritize GLB, then FBX, then OBJ, then USDZ
-        meshUrl = meshResult.model_urls.glb || 
-                  meshResult.model_urls.fbx || 
-                  meshResult.model_urls.obj ||
-                  meshResult.model_urls.usdz;
-        if (meshUrl) {
-          meshFormat = meshResult.model_urls.glb ? 'glb' :
-                      meshResult.model_urls.fbx ? 'fbx' :
-                      meshResult.model_urls.obj ? 'obj' : 'usdz';
-        }
-      }
-      // Only use downloadUrl if it's a 3D model file (not video)
-      else if (meshResult.downloadUrl && is3DModelUrl(meshResult.downloadUrl)) {
-        meshUrl = meshResult.downloadUrl;
-        meshFormat = meshResult.format || 'glb';
+    // STEP 2: Check meshResult.downloadUrl if no model_urls found
+    if (!meshUrl && item.jobData?.meshResult?.downloadUrl) {
+      const downloadUrl = item.jobData.meshResult.downloadUrl;
+      if (is3DModelUrl(downloadUrl) && !isVideoUrl(downloadUrl)) {
+        meshUrl = downloadUrl;
+        meshFormat = item.jobData.meshResult.format || 'glb';
+        console.log('✅ Found 3D model in meshResult.downloadUrl:', meshUrl);
       }
     }
     
-    // Fallback to meshUrl from jobData (only if it's a 3D model)
-    if (!meshUrl && item.jobData?.meshUrl && is3DModelUrl(item.jobData.meshUrl)) {
-      meshUrl = item.jobData.meshUrl;
+    // STEP 3: Fallback to meshUrl from jobData (only if it's a 3D model, not video)
+    if (!meshUrl && item.jobData?.meshUrl) {
+      if (is3DModelUrl(item.jobData.meshUrl) && !isVideoUrl(item.jobData.meshUrl)) {
+        meshUrl = item.jobData.meshUrl;
+        console.log('✅ Found 3D model in jobData.meshUrl:', meshUrl);
+      } else if (isVideoUrl(item.jobData.meshUrl)) {
+        console.warn('⚠️ jobData.meshUrl is a video, skipping:', item.jobData.meshUrl);
+      }
     }
     
-    // Final validation: ensure meshUrl is not a video
-    if (meshUrl && isVideoUrl(meshUrl)) {
-      console.warn('⚠️ Rejected video URL for 3D preview:', meshUrl);
-      meshUrl = null; // Clear the video URL
+    // Ensure fileUrl is set for skybox preview
+    if (!fileUrl && !meshUrl) {
+      console.warn('⚠️ Preview: No file URL or mesh URL available for item:', item.id);
+      // Still open preview to show item info
     }
     
-    const has3DAsset = !!meshUrl || item.metadata?.hasMesh;
+    // More comprehensive 3D asset detection
+    const hasModelUrls = !!(item.jobData?.model_urls || item.jobData?.meshResult?.model_urls);
+    const has3DAsset = !!meshUrl || 
+                      item.metadata?.hasMesh || 
+                      !!item.jobData?.meshUrl ||
+                      !!item.jobData?.meshResult ||
+                      hasModelUrls;
+    
+    // Validate meshUrl is actually a 3D model (not video)
+    const isValid3DUrl = meshUrl && !isVideoUrl(meshUrl) && is3DModelUrl(meshUrl);
     
     console.log('🔍 Preview click:', {
+      itemId: item.id,
+      itemTitle: item.title,
       has3DAsset,
+      hasModelUrls,
       meshUrl,
       meshFormat,
+      isValid3DUrl,
+      file_url: fileUrl,
+      original_file_url: item.file_url,
       meshResult: item.jobData?.meshResult,
-      model_urls: item.jobData?.meshResult?.model_urls,
+      model_urls: item.jobData?.model_urls || item.jobData?.meshResult?.model_urls,
+      jobData_meshUrl: item.jobData?.meshUrl,
+      metadata_hasMesh: item.metadata?.hasMesh,
       downloadUrl: item.jobData?.meshResult?.downloadUrl,
       isVideo: meshUrl ? isVideoUrl(meshUrl) : false,
       finalMeshUrl: meshUrl
     });
     
-    // Only set 3D preview if we have a valid 3D model URL (not video)
-    if (has3DAsset && meshUrl && !isVideoUrl(meshUrl) && is3DModelUrl(meshUrl)) {
+    // Prioritize 3D preview if we have a valid 3D model URL
+    if (has3DAsset && isValid3DUrl) {
+      console.log('✅ Opening 3D preview with meshUrl:', meshUrl);
       setPreviewType('3d');
       setPreviewItem({
         ...item,
+        file_url: fileUrl || item.file_url, // Ensure file_url is set for skybox background
         meshUrl,
-        meshFormat
+        meshFormat,
+        // Preserve all jobData for 3D viewer
+        jobData: {
+          ...item.jobData,
+          meshUrl: meshUrl,
+          model_urls: item.jobData?.model_urls || item.jobData?.meshResult?.model_urls
+        }
+      });
+    } else if (has3DAsset && !isValid3DUrl && hasModelUrls) {
+      // Has model_urls but meshUrl might be invalid - extract from model_urls
+      const modelUrls = item.jobData?.model_urls || item.jobData?.meshResult?.model_urls;
+      if (modelUrls) {
+        const extractedUrl = modelUrls.glb || modelUrls.fbx || modelUrls.obj || modelUrls.usdz;
+        const extractedFormat = modelUrls.glb ? 'glb' : modelUrls.fbx ? 'fbx' : modelUrls.obj ? 'obj' : 'usdz';
+        if (extractedUrl && !isVideoUrl(extractedUrl)) {
+          console.log('✅ Extracted 3D model URL from model_urls:', extractedUrl);
+          setPreviewType('3d');
+          setPreviewItem({
+            ...item,
+            file_url: fileUrl || item.file_url,
+            meshUrl: extractedUrl,
+            meshFormat: extractedFormat,
+            jobData: {
+              ...item.jobData,
+              meshUrl: extractedUrl,
+              model_urls: modelUrls
+            }
+          });
+          return;
+        }
+      }
+      // Has mesh but URL might be invalid - log and try anyway
+      console.warn('⚠️ Has 3D asset but URL validation failed, attempting 3D preview anyway:', meshUrl);
+      setPreviewType('3d');
+      setPreviewItem({
+        ...item,
+        file_url: fileUrl || item.file_url,
+        meshUrl,
+        meshFormat: meshFormat || 'glb',
+        jobData: {
+          ...item.jobData,
+          meshUrl: meshUrl
+        }
       });
     } else {
-      // Fallback to skybox preview
+      // Fallback to skybox preview - always open preview even if no file_url
+      console.log('✅ Opening skybox preview with file_url:', fileUrl || item.file_url);
       setPreviewType('skybox');
-      setPreviewItem(item);
+      setPreviewItem({
+        ...item,
+        file_url: fileUrl || item.file_url, // Use found fileUrl or original
+        meshUrl: null,
+        meshFormat: null
+      });
     }
   };
 
@@ -414,6 +907,89 @@ const History = ({ setBackgroundSkybox }) => {
     setPreviewItem(null);
     setPreviewType('skybox');
   };
+
+  // Auto-detect and switch to 3D preview when previewItem changes
+  useEffect(() => {
+    if (!previewItem) return;
+    
+    // Helper to extract 3D model URL from model_urls
+    const get3DModelUrl = () => {
+      // First, check if meshUrl is already a valid 3D model (not video)
+      if (previewItem.meshUrl) {
+        const urlLower = previewItem.meshUrl.toLowerCase();
+        const isVideo = urlLower.includes('.mp4') || 
+                       urlLower.includes('output.mp4') || 
+                       urlLower.includes('/output/output.mp4') ||
+                       urlLower.includes('video');
+        const is3DModel = urlLower.includes('.glb') || 
+                         urlLower.includes('.gltf') || 
+                         urlLower.includes('.fbx') || 
+                         urlLower.includes('.obj') || 
+                         urlLower.includes('.usdz');
+        
+        if (!isVideo && is3DModel) {
+          console.log('✅ Found valid 3D model URL in meshUrl:', previewItem.meshUrl);
+          return { url: previewItem.meshUrl, format: previewItem.meshFormat || 'glb' };
+        } else if (isVideo) {
+          console.warn('⚠️ meshUrl is a video, ignoring:', previewItem.meshUrl);
+        }
+      }
+      
+      // Try to get from model_urls
+      const modelUrls = previewItem.jobData?.model_urls || 
+                      previewItem.jobData?.meshResult?.model_urls;
+      
+      console.log('🔍 Checking model_urls:', {
+        hasJobDataModelUrls: !!previewItem.jobData?.model_urls,
+        hasMeshResultModelUrls: !!previewItem.jobData?.meshResult?.model_urls,
+        modelUrls: modelUrls
+      });
+      
+      if (modelUrls) {
+        // Prioritize GLB, then FBX, OBJ, USDZ
+        if (modelUrls.glb) {
+          console.log('✅ Found GLB URL in model_urls:', modelUrls.glb);
+          return { url: modelUrls.glb, format: 'glb' };
+        } else if (modelUrls.fbx) {
+          console.log('✅ Found FBX URL in model_urls:', modelUrls.fbx);
+          return { url: modelUrls.fbx, format: 'fbx' };
+        } else if (modelUrls.obj) {
+          console.log('✅ Found OBJ URL in model_urls:', modelUrls.obj);
+          return { url: modelUrls.obj, format: 'obj' };
+        } else if (modelUrls.usdz) {
+          console.log('✅ Found USDZ URL in model_urls:', modelUrls.usdz);
+          return { url: modelUrls.usdz, format: 'usdz' };
+        }
+      }
+      
+      console.warn('⚠️ No valid 3D model URL found in model_urls');
+      return null;
+    };
+    
+    const modelData = get3DModelUrl();
+    
+    // Auto-switch to 3D preview if we have a valid model but previewType is not '3d'
+    if (modelData && modelData.url && previewType !== '3d') {
+      console.log('🔄 Auto-detecting 3D asset, switching to 3D preview:', {
+        url: modelData.url,
+        format: modelData.format,
+        hasMesh: previewItem.metadata?.hasMesh,
+        currentPreviewType: previewType
+      });
+      setPreviewType('3d');
+      setPreviewItem(prev => ({ 
+        ...prev, 
+        meshUrl: modelData.url, 
+        meshFormat: modelData.format 
+      }));
+    } else if (!modelData && previewItem.metadata?.hasMesh) {
+      console.warn('⚠️ Item has hasMesh=true but no valid 3D model URL found:', {
+        meshUrl: previewItem.meshUrl,
+        jobData: previewItem.jobData,
+        model_urls: previewItem.jobData?.model_urls || previewItem.jobData?.meshResult?.model_urls
+      });
+    }
+  }, [previewItem?.id, previewItem?.meshUrl, previewItem?.jobData?.model_urls, previewItem?.jobData?.meshResult?.model_urls, previewItem?.metadata?.hasMesh, previewType]);
 
   const handleVariationClick = (variation) => {
     if (!variation.file_url) {
@@ -494,7 +1070,7 @@ const History = ({ setBackgroundSkybox }) => {
   };
 
   return (
-    <div className="flex-1 bg-transparent min-h-screen">
+    <div className="flex-1 pt-20 bg-transparent min-h-screen">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
@@ -512,14 +1088,14 @@ const History = ({ setBackgroundSkybox }) => {
                 // Actually, the onSnapshot should auto-update, so this is just for user feedback
                 setTimeout(() => setLoading(false), 1000);
               }}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-all duration-200 text-sm"
+              className="px-4 py-2 bg-[#141414]/60 hover:bg-[#141414]/80 text-white rounded-xl transition-all duration-200 text-sm border border-[#262626]"
               title="Refresh history"
             >
               🔄 Refresh
             </button>
             <button
               onClick={() => navigate('/main')}
-              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg transition-all duration-200 font-medium shadow-lg"
+              className="px-6 py-3 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white rounded-xl transition-all duration-200 font-medium shadow-lg"
             >
               <div className="flex items-center space-x-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -534,12 +1110,12 @@ const History = ({ setBackgroundSkybox }) => {
         {/* Controls */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2 bg-gray-800/50 rounded-lg p-1 border border-gray-700/50">
+            <div className="flex items-center space-x-2 bg-[#141414]/60 rounded-xl p-1 border border-[#262626]">
               <button
                 onClick={() => setViewMode('grid')}
                 className={`px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                   viewMode === 'grid'
-                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
@@ -551,7 +1127,7 @@ const History = ({ setBackgroundSkybox }) => {
                 onClick={() => setViewMode('list')}
                 className={`px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                   viewMode === 'list'
-                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
@@ -564,7 +1140,7 @@ const History = ({ setBackgroundSkybox }) => {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="px-3 py-2 bg-[#141414]/60 border border-[#262626] rounded-xl text-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/50"
             >
               <option value="all">All Status</option>
               <option value="completed">Completed</option>
@@ -579,7 +1155,7 @@ const History = ({ setBackgroundSkybox }) => {
         </div>
         
         {error && (
-          <div className="mb-8 p-4 bg-red-500/10 backdrop-blur-sm rounded-lg border border-red-500/20">
+          <div className="mb-8 p-4 bg-red-500/10 backdrop-blur-0 rounded-xl border border-red-500/30">
             <p className="text-red-300 font-semibold mb-2">Error loading history:</p>
             <p className="text-red-300 text-sm">{error}</p>
             <button
@@ -589,7 +1165,7 @@ const History = ({ setBackgroundSkybox }) => {
                 // Force re-render by updating a dependency
                 window.location.reload();
               }}
-              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm"
+              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm"
             >
               Retry
             </button>
@@ -604,8 +1180,10 @@ const History = ({ setBackgroundSkybox }) => {
             </div>
           </div>
         ) : filteredHistory.length === 0 ? (
-          <div className="bg-gray-900/20 backdrop-blur-sm rounded-lg p-12 text-center border border-gray-700/20">
-            <div className="w-16 h-16 bg-gray-800/50 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div className="relative bg-[#141414]/60 backdrop-blur-0 rounded-xl p-12 text-center border border-[#262626] shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
+            <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.01] via-transparent to-purple-500/[0.01] pointer-events-none rounded-xl overflow-hidden" />
+            <div className="relative">
+            <div className="w-16 h-16 bg-[#141414]/60 rounded-full flex items-center justify-center mx-auto mb-4 border border-[#262626]">
               <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
@@ -614,10 +1192,11 @@ const History = ({ setBackgroundSkybox }) => {
             <p className="text-gray-400 mb-6">Start creating your first In3D.Ai environment to see it here</p>
             <button
               onClick={() => navigate('/main')}
-              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg transition-all duration-200 font-medium"
+              className="px-6 py-3 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white rounded-xl transition-all duration-200 font-medium"
             >
                               Create Your First In3D.Ai Environment
             </button>
+            </div>
           </div>
         ) : (
           <AnimatePresence mode="wait">
@@ -642,34 +1221,30 @@ const History = ({ setBackgroundSkybox }) => {
                   {/* Main In3D.Ai Environment - Enhanced Card */}
                   <div
                     className={`
-                      relative group bg-gradient-to-br from-gray-900/40 via-gray-900/30 to-gray-800/40 
-                      backdrop-blur-md rounded-2xl overflow-hidden shadow-xl
-                      transform transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl cursor-pointer
-                      border border-gray-700/30 hover:border-blue-500/50 active:scale-[0.98]
-                      ${selectedSkybox?.id === item.id ? 'ring-2 ring-blue-500/70 shadow-blue-500/20' : ''}
+                      relative group bg-[#141414]/80 
+                      backdrop-blur-0 rounded-2xl overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.4)]
+                      transform transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_12px_48px_rgba(0,0,0,0.6)] cursor-pointer
+                      border border-[#262626] hover:border-sky-500/50 active:scale-[0.98]
+                      ${selectedSkybox?.id === item.id ? 'ring-2 ring-sky-500/70 shadow-sky-500/20' : ''}
                       ${viewMode === 'list' ? 'flex items-center space-x-4 p-4' : ''}
                     `}
-                    onClick={() => handleSkyboxClick(item)}
+                    onClick={(e) => handleItemClick(item, e)}
                     role="button"
                     tabIndex={0}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        handleSkyboxClick(item);
+                        handleItemClick(item, e);
                       }
                     }}
                   >
                     {/* Image Container with Enhanced Styling */}
                     <div className={`relative overflow-hidden ${viewMode === 'grid' ? 'aspect-[16/9]' : 'w-32 h-32 flex-shrink-0 rounded-lg'}`}>
-                      {item.file_url ? (
-                        <img
+                      {item.file_url && !is3DModelUrl(item.file_url) && !isVideoUrl(item.file_url) ? (
+                        <ThumbnailImage 
                           src={item.file_url}
                           alt={item.title}
                           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                          onError={(e) => {
-                            e.target.style.display = 'none';
-                            e.target.nextSibling.style.display = 'flex';
-                          }}
                         />
                       ) : null}
                       <div 
@@ -721,13 +1296,40 @@ const History = ({ setBackgroundSkybox }) => {
                         <div className="p-5 w-full">
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2">
-                              <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                               </svg>
-                              <span className="text-white text-sm font-semibold">Click to apply</span>
+                              <span className="text-white text-sm font-semibold">Click to preview</span>
                             </div>
                             <div className="flex items-center gap-2">
+                              {/* Preview Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handlePreviewClick(item, e);
+                                }}
+                                className="p-2.5 bg-sky-500/20 hover:bg-sky-500/30 backdrop-blur-sm rounded-lg transition-all duration-200 hover:scale-110 border border-sky-500/30"
+                                title="Preview"
+                              >
+                                <svg className="w-5 h-5 text-sky-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                              </button>
+                              {/* Apply Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSkyboxClick(item);
+                                }}
+                                className="p-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 backdrop-blur-sm rounded-lg transition-all duration-200 hover:scale-110 border border-emerald-500/30"
+                                title="Apply as background"
+                              >
+                                <svg className="w-5 h-5 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                                </svg>
+                              </button>
                               {/* Download Button */}
                               <button
                                 onClick={(e) => {
@@ -807,10 +1409,10 @@ const History = ({ setBackgroundSkybox }) => {
                           <div
                             key={variation.id}
                             className={`
-                              relative group bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-sm 
-                              rounded-xl overflow-hidden shadow-lg
-                              transform transition-all duration-300 hover:scale-105 hover:shadow-xl cursor-pointer
-                              border border-gray-700/40 hover:border-purple-500/60 active:scale-95
+                              relative group bg-[#141414]/60 backdrop-blur-0 
+                              rounded-xl overflow-hidden shadow-[0_4px_16px_rgba(0,0,0,0.2)]
+                              transform transition-all duration-300 hover:scale-105 hover:shadow-[0_8px_24px_rgba(0,0,0,0.4)] cursor-pointer
+                              border border-[#262626] hover:border-purple-500/60 active:scale-95
                               ${selectedVariation?.id === variation.id ? 'ring-2 ring-purple-500/70 shadow-purple-500/30' : ''}
                             `}
                             onClick={() => handleVariationClick(variation)}
@@ -889,12 +1491,12 @@ const History = ({ setBackgroundSkybox }) => {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full h-full max-w-7xl max-h-[90vh] m-4 bg-gray-900/95 backdrop-blur-md rounded-2xl overflow-hidden border border-gray-700/50 shadow-2xl"
+              className="relative w-full h-full max-w-7xl max-h-[90vh] m-4 bg-[#141414]/95 backdrop-blur-0 rounded-2xl overflow-hidden border border-[#262626] shadow-[0_8px_32px_rgba(0,0,0,0.6)]"
             >
               {/* Close Button */}
               <button
                 onClick={closePreview}
-                className="absolute top-4 right-4 z-10 p-3 bg-gray-800/90 hover:bg-gray-700/90 backdrop-blur-sm rounded-lg transition-all duration-200 hover:scale-110 border border-gray-700/50"
+                className="absolute top-4 right-4 z-10 p-3 bg-[#141414]/90 hover:bg-[#1a1a1a]/90 backdrop-blur-0 rounded-xl transition-all duration-200 hover:scale-110 border border-[#262626]"
                 aria-label="Close preview"
               >
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -929,52 +1531,395 @@ const History = ({ setBackgroundSkybox }) => {
                 </div>
 
                 {/* Preview Body */}
-                <div className="flex-1 relative overflow-hidden">
-                  {previewType === '3d' && previewItem.meshUrl && 
-                   !previewItem.meshUrl.toLowerCase().includes('.mp4') &&
-                   !previewItem.meshUrl.toLowerCase().includes('output.mp4') &&
-                   !previewItem.meshUrl.toLowerCase().includes('/output/output.mp4') ? (
-                    // 3D Preview
-                    <div className="w-full h-full">
-                      <AssetViewerWithSkybox
-                        assetUrl={previewItem.meshUrl}
-                        skyboxImageUrl={previewItem.file_url || previewItem.jobData?.skyboxUrl}
-                        assetFormat={previewItem.meshFormat || 'glb'}
-                        className="w-full h-full"
-                        onLoad={(model) => {
-                          console.log('✅ 3D asset loaded in preview:', model);
-                        }}
-                        onError={(error) => {
-                          console.error('❌ 3D asset loading error:', error);
-                          // Fallback to skybox preview on error
-                          setPreviewType('skybox');
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    // Skybox Image Preview
-                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-900 to-black p-8">
-                      {previewItem.file_url ? (
-                        <img
-                          src={previewItem.file_url}
-                          alt={previewItem.title}
-                          className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
-                          onError={(e) => {
-                            e.target.style.display = 'none';
-                            e.target.nextSibling.style.display = 'flex';
-                          }}
-                        />
-                      ) : null}
-                      <div className="hidden w-full h-full items-center justify-center">
-                        <div className="text-center">
-                          <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          <p className="text-gray-400">No preview available</p>
+                <div className="flex-1 relative overflow-hidden bg-gradient-to-br from-gray-900 to-black min-h-[500px]">
+                  {(() => {
+                    // Helper to check if URL is a video file
+                    const isVideoUrl = (url) => {
+                      if (!url || typeof url !== 'string') return false;
+                      const urlLower = url.toLowerCase();
+                      return urlLower.includes('.mp4') || 
+                             urlLower.includes('output.mp4') || 
+                             urlLower.includes('/output/output.mp4') ||
+                             urlLower.includes('video');
+                    };
+                    
+                    // Helper to check if URL is a 3D model file
+                    const is3DModelUrl = (url) => {
+                      if (!url || typeof url !== 'string') return false;
+                      if (isVideoUrl(url)) return false;
+                      const urlLower = url.toLowerCase();
+                      return urlLower.includes('.glb') || 
+                             urlLower.includes('.gltf') || 
+                             urlLower.includes('.fbx') || 
+                             urlLower.includes('.obj') || 
+                             urlLower.includes('.usdz') ||
+                             urlLower.includes('model.glb');
+                    };
+                    
+                    // Helper to extract 3D model URL - ALWAYS prioritize GLB from model_urls
+                    const get3DModelUrl = () => {
+                      console.log('🔍 get3DModelUrl: Extracting 3D model URL...', {
+                        hasMeshUrl: !!previewItem.meshUrl,
+                        meshUrl: previewItem.meshUrl,
+                        hasJobDataModelUrls: !!previewItem.jobData?.model_urls,
+                        hasMeshResultModelUrls: !!previewItem.jobData?.meshResult?.model_urls
+                      });
+                      
+                      // FIRST: Always check model_urls for GLB (highest priority)
+                      const modelUrls = previewItem.jobData?.model_urls || 
+                                      previewItem.jobData?.meshResult?.model_urls;
+                      
+                      if (modelUrls) {
+                        console.log('🔍 Found model_urls:', {
+                          hasGlb: !!modelUrls.glb,
+                          hasFbx: !!modelUrls.fbx,
+                          hasObj: !!modelUrls.obj,
+                          hasUsdz: !!modelUrls.usdz,
+                          glbUrl: modelUrls.glb
+                        });
+                        
+                        // Prioritize GLB, then FBX, OBJ, USDZ - skip video URLs
+                        if (modelUrls.glb && !isVideoUrl(modelUrls.glb)) {
+                          console.log('✅ Using GLB from model_urls:', modelUrls.glb);
+                          return { url: modelUrls.glb, format: 'glb' };
+                        } else if (modelUrls.fbx && !isVideoUrl(modelUrls.fbx)) {
+                          console.log('✅ Using FBX from model_urls:', modelUrls.fbx);
+                          return { url: modelUrls.fbx, format: 'fbx' };
+                        } else if (modelUrls.obj && !isVideoUrl(modelUrls.obj)) {
+                          console.log('✅ Using OBJ from model_urls:', modelUrls.obj);
+                          return { url: modelUrls.obj, format: 'obj' };
+                        } else if (modelUrls.usdz && !isVideoUrl(modelUrls.usdz)) {
+                          console.log('✅ Using USDZ from model_urls:', modelUrls.usdz);
+                          return { url: modelUrls.usdz, format: 'usdz' };
+                        }
+                      }
+                      
+                      // SECOND: Check if meshUrl is a valid 3D model (not video)
+                      if (previewItem.meshUrl && is3DModelUrl(previewItem.meshUrl)) {
+                        console.log('✅ Using meshUrl as 3D model:', previewItem.meshUrl);
+                        return { url: previewItem.meshUrl, format: previewItem.meshFormat || 'glb' };
+                      } else if (previewItem.meshUrl && isVideoUrl(previewItem.meshUrl)) {
+                        console.warn('⚠️ meshUrl is a video, skipping:', previewItem.meshUrl);
+                      }
+                      
+                      // THIRD: Check downloadUrl from meshResult
+                      const downloadUrl = previewItem.jobData?.meshResult?.downloadUrl;
+                      if (downloadUrl && is3DModelUrl(downloadUrl)) {
+                        console.log('✅ Using downloadUrl as 3D model:', downloadUrl);
+                        return { url: downloadUrl, format: 'glb' };
+                      }
+                      
+                      console.warn('⚠️ No valid 3D model URL found');
+                      return null;
+                    };
+                    
+                    // Get the actual 3D model URL
+                    const modelData = get3DModelUrl();
+                    
+                    // ALWAYS show 3D preview if we have a valid 3D model URL (regardless of previewType)
+                    // This ensures GLB models are displayed instead of videos
+                    const hasValid3D = modelData && modelData.url && modelData.url.trim() !== '';
+                    
+                    // If we have a valid 3D model but previewType isn't '3d', switch it
+                    if (hasValid3D && previewType !== '3d') {
+                      console.log('🔄 Auto-switching to 3D preview for GLB model:', modelData.url);
+                      setPreviewType('3d');
+                      setPreviewItem(prev => ({
+                        ...prev,
+                        meshUrl: modelData.url,
+                        meshFormat: modelData.format,
+                        jobData: {
+                          ...prev.jobData,
+                          meshUrl: modelData.url,
+                          model_urls: prev.jobData?.model_urls || prev.jobData?.meshResult?.model_urls
+                        }
+                      }));
+                      // Return loading state while switching
+                      return (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <div className="text-center">
+                            <div className="w-16 h-16 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                            <p className="text-white">Loading 3D Asset...</p>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  )}
+                      );
+                    }
+
+                    if (hasValid3D) {
+                      // 3D Preview
+                      return (
+                        <div className="w-full h-full">
+                          <Suspense fallback={
+                            <div className="w-full h-full flex items-center justify-center">
+                              <div className="text-center">
+                                <div className="w-16 h-16 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                                <p className="text-white">Loading 3D Asset...</p>
+                              </div>
+                            </div>
+                          }>
+                            <AssetViewerWithSkybox
+                              assetUrl={modelData.url}
+                              skyboxImageUrl={(() => {
+                                // Helper to check if URL is a video file
+                                const isVideoUrl = (url) => {
+                                  if (!url || typeof url !== 'string') return false;
+                                  const urlLower = url.toLowerCase();
+                                  return urlLower.includes('.mp4') || 
+                                         urlLower.includes('output.mp4') || 
+                                         urlLower.includes('/output/output.mp4') ||
+                                         urlLower.includes('video');
+                                };
+                                
+                                // Helper to check if URL is a 3D model file
+                                const is3DModelUrl = (url) => {
+                                  if (!url || typeof url !== 'string') return false;
+                                  if (isVideoUrl(url)) return false;
+                                  const urlLower = url.toLowerCase();
+                                  return urlLower.includes('.glb') || 
+                                         urlLower.includes('.gltf') || 
+                                         urlLower.includes('.fbx') || 
+                                         urlLower.includes('.obj') || 
+                                         urlLower.includes('.usdz');
+                                };
+                                
+                                // Get skybox URL but exclude video URLs and 3D model URLs
+                                const candidates = [
+                                  previewItem.file_url,
+                                  previewItem.jobData?.skyboxUrl,
+                                  previewItem.jobData?.skyboxResult?.fileUrl,
+                                  previewItem.jobData?.skyboxResult?.downloadUrl
+                                ].filter(Boolean);
+                                
+                                // Find first valid skybox URL (not video, not 3D model)
+                                for (const url of candidates) {
+                                  if (url && !isVideoUrl(url) && !is3DModelUrl(url)) {
+                                    return url;
+                                  }
+                                }
+                                return undefined; // No valid skybox URL - will use default black skybox
+                              })()}
+                              assetFormat={modelData.format}
+                              className="w-full h-full"
+                              autoRotate={true}
+                              autoRotateSpeed={0.5}
+                              onLoad={(model) => {
+                                console.log('✅ 3D asset loaded successfully in preview');
+                                console.log('📦 3D model URL:', modelData.url);
+                                console.log('📦 Model format:', modelData.format);
+                              }}
+                              onError={(error) => {
+                                console.error('❌ 3D asset loading error:', error);
+                                console.error('📦 Failed URL:', modelData.url);
+                                console.error('📦 Error details:', error.message);
+                                // Don't fallback to skybox - show error message instead
+                              }}
+                            />
+                          </Suspense>
+                        </div>
+                      );
+                    } else {
+                      // Helper to check if URL is a video file
+                      const isVideoUrl = (url) => {
+                        if (!url || typeof url !== 'string') return false;
+                        const urlLower = url.toLowerCase();
+                        return urlLower.includes('.mp4') || 
+                               urlLower.includes('output.mp4') || 
+                               urlLower.includes('/output/output.mp4') ||
+                               urlLower.includes('video');
+                      };
+                      
+                      // Check if we have a 3D asset but it wasn't detected - try to extract it
+                      const modelData = get3DModelUrl();
+                      if (modelData && previewItem.metadata?.hasMesh) {
+                        // We have a 3D model URL but previewType wasn't set to '3d' - switch to 3D preview
+                        console.log('🔄 Found 3D model URL, switching to 3D preview:', modelData.url);
+                        setPreviewType('3d');
+                        setPreviewItem(prev => ({ 
+                          ...prev, 
+                          meshUrl: modelData.url, 
+                          meshFormat: modelData.format 
+                        }));
+                        return (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <div className="text-center">
+                              <div className="w-16 h-16 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                              <p className="text-white">Loading 3D Asset...</p>
+                            </div>
+                          </div>
+                        );
+                      }
+                      
+                      // Skybox Image Preview with CORS handling
+                      let displayFileUrl = previewItem.file_url || 
+                                           previewItem.jobData?.skyboxUrl || 
+                                           previewItem.jobData?.skyboxResult?.fileUrl ||
+                                           previewItem.jobData?.skyboxResult?.downloadUrl ||
+                                           null;
+                      
+                      // Reject video URLs - don't try to display MP4 as image
+                      if (displayFileUrl && isVideoUrl(displayFileUrl)) {
+                        console.warn('⚠️ Rejected video URL for image preview:', displayFileUrl);
+                        displayFileUrl = null;
+                      }
+                      
+                      // If we have a 3D asset but no valid image, show a message instead of trying to load video
+                      if (!displayFileUrl && previewItem.metadata?.hasMesh) {
+                        return (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <div className="text-center">
+                              <svg className="w-16 h-16 text-emerald-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                              </svg>
+                              <p className="text-white text-lg font-semibold mb-2">3D Asset Available</p>
+                              <p className="text-gray-400 text-sm mb-4">
+                                This item contains a 3D model. The preview should display the 3D asset.
+                              </p>
+                              {modelData && (
+                                <button
+                                  onClick={() => {
+                                    setPreviewType('3d');
+                                    setPreviewItem(prev => ({ 
+                                      ...prev, 
+                                      meshUrl: modelData.url, 
+                                      meshFormat: modelData.format 
+                                    }));
+                                  }}
+                                  className="px-4 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded-lg border border-sky-500/30 transition-colors"
+                                >
+                                  Load 3D Model
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+                      
+                      // Component to handle image loading with proxy fallback
+                      const ImagePreview = ({ src, alt }) => {
+                        const [imageSrc, setImageSrc] = React.useState(src);
+                        const [loadingError, setLoadingError] = React.useState(false);
+                        const [currentStrategy, setCurrentStrategy] = React.useState('direct');
+                        
+                        React.useEffect(() => {
+                          setImageSrc(src);
+                          setLoadingError(false);
+                          setCurrentStrategy('direct');
+                        }, [src]);
+                        
+                        const handleError = async (e) => {
+                          // Don't try to load video URLs as images
+                          if (isVideoUrl(imageSrc)) {
+                            console.warn('⚠️ Attempted to load video URL as image, rejecting:', imageSrc);
+                            setLoadingError(true);
+                            return;
+                          }
+                          
+                          console.error(`❌ Image failed to load (${currentStrategy}):`, imageSrc);
+                          
+                          // Try proxy fallback if direct URL failed
+                          if (currentStrategy === 'direct' && src && !isVideoUrl(src)) {
+                            try {
+                              const { getApiBaseUrl } = await import('../utils/apiConfig');
+                              const proxyUrl = `${getApiBaseUrl()}/proxy-asset?url=${encodeURIComponent(src)}`;
+                              console.log('🔄 Trying proxy URL:', proxyUrl);
+                              setImageSrc(proxyUrl);
+                              setCurrentStrategy('proxy');
+                              setLoadingError(false);
+                              return; // Don't show error yet, try proxy first
+                            } catch (err) {
+                              console.error('❌ Failed to get proxy URL:', err);
+                            }
+                          }
+                          
+                          // If proxy also failed or no proxy available, show error
+                          setLoadingError(true);
+                          e.target.style.display = 'none';
+                          const errorDiv = e.target.nextElementSibling;
+                          if (errorDiv) {
+                            errorDiv.style.display = 'flex';
+                          }
+                        };
+                        
+                        if (loadingError) {
+                          return (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <div className="text-center">
+                                <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                                <p className="text-gray-400 mb-2">Image failed to load</p>
+                                <p className="text-gray-500 text-xs break-all px-4 max-w-md mx-auto">URL: {src}</p>
+                                <button
+                                  onClick={() => {
+                                    setImageSrc(src);
+                                    setLoadingError(false);
+                                    setCurrentStrategy('direct');
+                                  }}
+                                  className="mt-4 px-4 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded-lg border border-sky-500/30 transition-colors"
+                                >
+                                  Retry
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+                        
+                        return (
+                          <>
+                            <img
+                              src={imageSrc}
+                              alt={alt}
+                              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+                              onError={handleError}
+                              onLoad={() => {
+                                console.log(`✅ Image loaded successfully (${currentStrategy}):`, imageSrc);
+                              }}
+                              crossOrigin="anonymous"
+                            />
+                            <div className="hidden w-full h-full items-center justify-center">
+                              <div className="text-center">
+                                <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                                <p className="text-gray-400 mb-2">Image failed to load</p>
+                                <p className="text-gray-500 text-xs break-all px-4">URL: {imageSrc}</p>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      };
+                      
+                      return (
+                        <div className="w-full h-full flex items-center justify-center p-8">
+                          {displayFileUrl ? (
+                            <ImagePreview src={displayFileUrl} alt={previewItem.title || 'Preview'} />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <div className="text-center">
+                                <svg className="w-16 h-16 text-gray-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                                <p className="text-gray-400 mb-2">No preview image available</p>
+                                <p className="text-gray-500 text-sm">Item: {previewItem.title || previewItem.id}</p>
+                                {previewItem.jobData && (
+                                  <div className="mt-4 text-left text-xs text-gray-500 space-y-1 max-w-md mx-auto">
+                                    <p>Has Skybox: {previewItem.jobData.skyboxUrl ? 'Yes' : 'No'}</p>
+                                    <p>Has Mesh: {previewItem.jobData.meshUrl ? 'Yes' : 'No'}</p>
+                                    {previewItem.jobData.skyboxResult && (
+                                      <p>Skybox Result: {previewItem.jobData.skyboxResult.status || 'Unknown'}</p>
+                                    )}
+                                    {previewItem.jobData.meshResult && (
+                                      <p>Mesh Result: {previewItem.jobData.meshResult.status || 'Unknown'}</p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
 
                 {/* Footer Actions */}

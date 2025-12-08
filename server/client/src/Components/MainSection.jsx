@@ -110,22 +110,51 @@ const MainSection = ({ setBackgroundSkybox }) => {
         setSkyboxStyles(stylesArray);
         setStylesLoading(false);
         setStylesError(null);
-        console.log('Fetched In3D.Ai styles:', stylesArray);
+        console.log('✅ Fetched In3D.Ai styles:', stylesArray.length, 'styles loaded');
+        
+        // If no styles loaded but API call succeeded, log a warning
+        if (stylesArray.length === 0) {
+          console.warn('⚠️ No styles returned from API, but request succeeded');
+        }
       } catch (error) {
         setStylesLoading(false);
-        setStylesError("Failed to load In3D.Ai styles. Please check your API configuration.");
+        
+        // Provide more specific error message
+        let errorMessage = "Failed to load In3D.Ai styles. Please check your API configuration.";
+        if (error.message) {
+          errorMessage = error.message;
+        }
+        
+        setStylesError(errorMessage);
         setSkyboxStyles([]);
-        console.error("Error fetching In3D.Ai styles:", error);
+        console.error("❌ Error fetching In3D.Ai styles:", error);
+        console.error("Error details:", {
+          message: error.message,
+          status: error.response?.status,
+          url: error.config?.url,
+          baseURL: error.config?.baseURL
+        });
 
-        // Existing top-right DOM toast (kept for logic compatibility)
-        const errorMessage = document.createElement('div');
-        errorMessage.className = 'fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50';
-        errorMessage.innerHTML = `
-          <div class="font-bold mb-2">⚠️ Configuration Issue</div>
-          <div class="text-sm">Unable to load 3D generation styles. Please check your API configuration.</div>
-        `;
-        document.body.appendChild(errorMessage);
-        setTimeout(() => document.body.removeChild(errorMessage), 5000);
+        // Only show error toast if it's a critical error (not just empty results)
+        const isCriticalError = error.response?.status >= 500 || 
+                                error.message?.includes('Network error') ||
+                                error.message?.includes('not configured');
+        
+        if (isCriticalError) {
+          // Existing top-right DOM toast (kept for logic compatibility)
+          const errorToast = document.createElement('div');
+          errorToast.className = 'fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50';
+          errorToast.innerHTML = `
+            <div class="font-bold mb-2">⚠️ Configuration Issue</div>
+            <div class="text-sm">Unable to load 3D generation styles. Please check your API configuration.</div>
+          `;
+          document.body.appendChild(errorToast);
+          setTimeout(() => {
+            if (document.body.contains(errorToast)) {
+              document.body.removeChild(errorToast);
+            }
+          }, 5000);
+        }
       }
     };
     fetchSkyboxStyles();
@@ -372,14 +401,23 @@ const MainSection = ({ setBackgroundSkybox }) => {
   }, [user?.uid]);
 
   // -------------------------
+  // Get current plan details
+  // -------------------------
+  const currentPlan = subscriptionService.getPlanById(subscription?.planId || 'free');
+  const currentUsage = parseInt(subscription?.usage?.skyboxGenerations || 0);
+  const currentLimit = currentPlan?.limits?.skyboxGenerations || 5;
+  const isUnlimited = currentLimit === Infinity;
+
+  // -------------------------
   // Subscription info
   // -------------------------
   const subscriptionInfo = {
-    plan: subscription?.planId || 'Free',
-    generationsLeft: subscription?.usage?.limit - subscription?.usage?.count || 0,
-    totalGenerations: subscription?.usage?.count || 0,
-    planName: subscription?.planId === 'free' ? 'Free Plan' : subscription?.planId === 'pro' ? 'Pro Plan' : 'Enterprise Plan',
-    maxGenerations: subscription?.planId === 'free' ? 5 : subscription?.planId === 'pro' ? 50 : 100
+    plan: subscription?.planId || 'free',
+    planName: currentPlan?.name || 'Free',
+    generationsLeft: isUnlimited ? '∞' : Math.max(0, currentLimit - currentUsage),
+    totalGenerations: currentUsage,
+    maxGenerations: currentLimit,
+    isUnlimited: isUnlimited
   };
 
   // -------------------------
@@ -414,11 +452,6 @@ const MainSection = ({ setBackgroundSkybox }) => {
       setNumVariations(TRIAL_MAX_VARIATIONS);
     }
   }, [isTrialUser, numVariations]);
-
-  const currentPlan = subscriptionService.getPlanById(subscription?.planId || 'free');
-  const currentUsage = parseInt(subscription?.usage?.skyboxGenerations || 0);
-  const currentLimit = currentPlan?.limits.skyboxGenerations || 10;
-  const isUnlimited = currentLimit === Infinity;
 
   const remainingGenerations = isUnlimited 
     ? '∞' 
@@ -472,14 +505,17 @@ const MainSection = ({ setBackgroundSkybox }) => {
       return;
     }
 
-    if (!isUnlimited && remainingGenerations < numVariations) {
-      const canGenerate = Math.max(0, remainingGenerations);
-      setError(
-        subscription?.planId === 'free' 
-          ? `You've reached your free tier limit. You can generate ${canGenerate} more In3D.Ai environment${canGenerate === 1 ? '' : 's'}. Please upgrade to continue generating environments.`
-          : `You've reached your daily generation limit. You can generate ${canGenerate} more In3D.Ai environment${canGenerate === 1 ? '' : 's'}. Please try again tomorrow.`
-      );
-      return;
+    if (!isUnlimited) {
+      const remaining = typeof remainingGenerations === 'number' ? remainingGenerations : 0;
+      if (remaining < numVariations) {
+        const canGenerate = Math.max(0, remaining);
+        setError(
+          subscription?.planId === 'free' 
+            ? `You've reached your free tier limit. You can generate ${canGenerate} more In3D.Ai environment${canGenerate === 1 ? '' : 's'}. Please upgrade to continue generating environments.`
+            : `You've reached your monthly generation limit. You can generate ${canGenerate} more In3D.Ai environment${canGenerate === 1 ? '' : 's'}. Please upgrade to continue generating environments.`
+        );
+        return;
+      }
     }
 
     setIsGenerating(true);
@@ -910,7 +946,7 @@ const MainSection = ({ setBackgroundSkybox }) => {
   // Upgrade handler
   // -------------------------
   const handleUpgrade = () => {
-    setShowUpgradeModal(true);
+    navigate('/pricing');
   };
 
   // -------------------------
@@ -1429,13 +1465,13 @@ const MainSection = ({ setBackgroundSkybox }) => {
                             ${
                               isGenerating
                                 ? 'bg-sky-600/60 text-white cursor-not-allowed'
-                                : !isUnlimited && remainingAfterGeneration < 0
+                                : !isUnlimited && typeof remainingAfterGeneration === 'number' && remainingAfterGeneration < 0
                                 ? 'bg-gradient-to-r from-purple-500/80 to-pink-600/80 text-white'
                                 : 'bg-gradient-to-r from-sky-500/80 to-indigo-600/80 hover:from-sky-500 hover:to-indigo-500 text-white'
                             }
                           `}
                           onClick={
-                            !isUnlimited && remainingAfterGeneration < 0
+                            !isUnlimited && typeof remainingAfterGeneration === 'number' && remainingAfterGeneration < 0
                               ? handleUpgrade
                               : generateSkybox
                           }
@@ -1465,7 +1501,7 @@ const MainSection = ({ setBackgroundSkybox }) => {
                               </svg>
                               <span>{isGenerating ? 'Generating Environment...' : 'Generating 3D Asset...'}</span>
                             </>
-                          ) : !isUnlimited && remainingAfterGeneration < 0 ? (
+                          ) : !isUnlimited && typeof remainingAfterGeneration === 'number' && remainingAfterGeneration < 0 ? (
                             <>
                               <svg
                                 className="w-4 h-4"

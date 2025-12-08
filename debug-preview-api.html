@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Preview API Diagnostic</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+        .test {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #333;
+            border-radius: 5px;
+        }
+        .success { color: #00ff00; }
+        .error { color: #ff0000; }
+        .warning { color: #ffaa00; }
+        button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0052a3; }
+        pre {
+            background: #000;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Preview API Diagnostic Tool</h1>
+    <p>Use this to test if the API is working in your preview environment.</p>
+    
+    <div class="test">
+        <h2>Test 1: API Base URL</h2>
+        <button onclick="testBaseURL()">Test Base URL</button>
+        <div id="baseURL-result"></div>
+    </div>
+    
+    <div class="test">
+        <h2>Test 2: Skybox Styles Endpoint</h2>
+        <button onclick="testStylesEndpoint()">Test Styles API</button>
+        <div id="styles-result"></div>
+    </div>
+    
+    <div class="test">
+        <h2>Test 3: Health Check</h2>
+        <button onclick="testHealth()">Test Health</button>
+        <div id="health-result"></div>
+    </div>
+    
+    <div class="test">
+        <h2>Test 4: CORS Check</h2>
+        <button onclick="testCORS()">Test CORS</button>
+        <div id="cors-result"></div>
+    </div>
+    
+    <div class="test">
+        <h2>Test 5: Full Diagnostic</h2>
+        <button onclick="runAllTests()">Run All Tests</button>
+        <div id="all-results"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'https://us-central1-in3devoneuralai.cloudfunctions.net/api';
+        
+        function log(elementId, message, type = 'info') {
+            const div = document.getElementById(elementId);
+            const className = type === 'success' ? 'success' : type === 'error' ? 'error' : 'warning';
+            div.innerHTML = `<div class="${className}">${message}</div>`;
+        }
+        
+        async function testBaseURL() {
+            log('baseURL-result', 'Testing...', 'warning');
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                log('baseURL-result', `✅ API is accessible!<br>Status: ${response.status}<br>Response: <pre>${JSON.stringify(data, null, 2)}</pre>`, 'success');
+            } catch (error) {
+                log('baseURL-result', `❌ API not accessible!<br>Error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testStylesEndpoint() {
+            log('styles-result', 'Testing styles endpoint...', 'warning');
+            try {
+                const response = await fetch(`${API_BASE}/skybox/styles?page=1&limit=5`);
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    const count = Array.isArray(data.data) ? data.data.length : 0;
+                    log('styles-result', `✅ Styles endpoint working!<br>Status: ${response.status}<br>Styles returned: ${count}<br>Response: <pre>${JSON.stringify(data, null, 2)}</pre>`, 'success');
+                } else {
+                    log('styles-result', `⚠️ Styles endpoint returned error<br>Status: ${response.status}<br>Response: <pre>${JSON.stringify(data, null, 2)}</pre>`, 'error');
+                }
+            } catch (error) {
+                log('styles-result', `❌ Styles endpoint failed!<br>Error: ${error.message}<br>This might be a CORS issue.`, 'error');
+            }
+        }
+        
+        async function testHealth() {
+            log('health-result', 'Testing health endpoint...', 'warning');
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                log('health-result', `✅ Health check passed!<br>Status: ${response.status}<br>Response: <pre>${JSON.stringify(data, null, 2)}</pre>`, 'success');
+            } catch (error) {
+                log('health-result', `❌ Health check failed!<br>Error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testCORS() {
+            log('cors-result', 'Testing CORS...', 'warning');
+            try {
+                const response = await fetch(`${API_BASE}/skybox/styles?page=1&limit=1`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const corsHeaders = {
+                    'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                    'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                    'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers')
+                };
+                
+                log('cors-result', `CORS Headers:<br><pre>${JSON.stringify(corsHeaders, null, 2)}</pre>`, 
+                    corsHeaders['Access-Control-Allow-Origin'] ? 'success' : 'error');
+            } catch (error) {
+                log('cors-result', `❌ CORS test failed!<br>Error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function runAllTests() {
+            log('all-results', 'Running all tests...', 'warning');
+            const results = [];
+            
+            // Test 1
+            try {
+                const health = await fetch(`${API_BASE}/health`);
+                results.push(`✅ Health: ${health.status} OK`);
+            } catch (e) {
+                results.push(`❌ Health: ${e.message}`);
+            }
+            
+            // Test 2
+            try {
+                const styles = await fetch(`${API_BASE}/skybox/styles?page=1&limit=5`);
+                const data = await styles.json();
+                if (styles.ok && data.success) {
+                    const count = Array.isArray(data.data) ? data.data.length : 0;
+                    results.push(`✅ Styles: ${count} styles returned`);
+                } else {
+                    results.push(`⚠️ Styles: ${styles.status} - ${data.error || 'Unknown error'}`);
+                }
+            } catch (e) {
+                results.push(`❌ Styles: ${e.message}`);
+            }
+            
+            // Test 3
+            try {
+                const env = await fetch(`${API_BASE}/env-check`);
+                const envData = await env.json();
+                results.push(`✅ Env Check: ${env.status} OK`);
+            } catch (e) {
+                results.push(`❌ Env Check: ${e.message}`);
+            }
+            
+            log('all-results', results.join('<br>'), results.some(r => r.startsWith('❌')) ? 'error' : 'success');
+        }
+    </script>
+</body>
+</html>
+

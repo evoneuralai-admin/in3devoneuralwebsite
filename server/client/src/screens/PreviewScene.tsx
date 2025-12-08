@@ -63,11 +63,13 @@ class ModelLoader {
         return this.loadGLTF(url);
       },
       
-      // Strategy 3: Local development server proxy
+      // Strategy 3: Backend proxy (use getApiBaseUrl)
       async () => {
-        const localProxy = `http://localhost:5002/proxy-asset?url=${encodeURIComponent(url)}`;
-        console.log('🔄 Loading via local proxy:', localProxy);
-        return this.loadGLTF(localProxy);
+        const { getApiBaseUrl } = await import('../utils/apiConfig');
+        const apiBaseUrl = getApiBaseUrl();
+        const proxyUrl = `${apiBaseUrl}/proxy-asset?url=${encodeURIComponent(url)}`;
+        console.log('🔄 Loading via backend proxy:', proxyUrl);
+        return this.loadGLTF(proxyUrl);
       }
     ];
 
@@ -250,9 +252,7 @@ const SkyboxEnvironment: React.FC<{
           // Strategy 1: Direct loading (skyboxes usually work fine)
           () => skyboxUrl,
           // Strategy 2: Proxy if direct fails
-          () => `${getApiBaseUrl()}/proxy-asset?url=${encodeURIComponent(skyboxUrl)}`,
-          // Strategy 3: Local proxy
-          () => `http://localhost:5002/proxy-asset?url=${encodeURIComponent(skyboxUrl)}`
+          () => `${getApiBaseUrl()}/proxy-asset?url=${encodeURIComponent(skyboxUrl)}`
         ];
 
         let loadedTexture: THREE.Texture | null = null;

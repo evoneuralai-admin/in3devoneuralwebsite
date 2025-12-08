@@ -13,12 +13,8 @@ export const testAssetLoading = async (assetUrl: string): Promise<{
 }> => {
   const strategies = [
     {
-      name: 'Firebase Functions Proxy',
+      name: 'Backend Proxy',
       url: `${getApiBaseUrl()}/proxy-asset?url=${encodeURIComponent(assetUrl)}`
-    },
-    {
-      name: 'Local Development Proxy',
-      url: `http://localhost:5002/proxy-asset?url=${encodeURIComponent(assetUrl)}`
     },
     {
       name: 'Direct URL',

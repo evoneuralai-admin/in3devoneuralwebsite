@@ -14,31 +14,112 @@ export class RazorpayService {
   private isInitialized: boolean = false;
 
   private constructor() {
-    this.razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID || '';
+    // Try multiple ways to get the Razorpay key ID
+    this.razorpayKeyId = 
+      import.meta.env.VITE_RAZORPAY_KEY_ID || 
+      (window as any).__RAZORPAY_KEY_ID__ || 
+      '';
+    
     if (typeof window === 'undefined') {
       console.warn('RazorpayService: Not in browser environment, skipping initialization');
       return;
     }
+    
+    // In preview environments, try to fetch from API if not available
     if (!this.razorpayKeyId) {
-      console.warn('Razorpay key ID not found in environment variables - payment features will be disabled');
+      console.warn('Razorpay key ID not found in environment variables - attempting to fetch from API');
+      this.fetchRazorpayKeyFromAPI().then(() => {
+        if (this.razorpayKeyId) {
+          this.isInitialized = true;
+          this.loadRazorpayScript();
+        } else {
+          console.warn('Razorpay key ID could not be retrieved - payment features will be disabled');
+        }
+      }).catch(() => {
+        console.warn('Failed to fetch Razorpay key from API - payment features will be disabled');
+      });
       return;
     }
+    
     this.isInitialized = true;
     this.loadRazorpayScript();
   }
 
+  private async fetchRazorpayKeyFromAPI(): Promise<void> {
+    try {
+      const apiBaseUrl = this.getApiBaseUrl();
+      const response = await fetch(`${apiBaseUrl}/config/razorpay-key`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.keyId) {
+          this.razorpayKeyId = data.keyId;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch Razorpay key from API:', error);
+    }
+  }
+
+  private getApiBaseUrl(): string {
+    // Check for explicit API base URL from environment
+    if (import.meta.env.VITE_API_BASE_URL) {
+      return import.meta.env.VITE_API_BASE_URL;
+    }
+    
+    // Use local backend in development
+    if (import.meta.env.DEV) {
+      return 'http://localhost:5001/in3devoneuralai/us-central1/api';
+    }
+    
+    const region = 'us-central1';
+    const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || 'in3devoneuralai';
+    return `https://${region}-${projectId}.cloudfunctions.net/api`;
+  }
+
   private loadRazorpayScript(): void {
     if (this.scriptLoaded || typeof window === 'undefined') return;
+    
+    // Check if script is already loaded
+    if (window.Razorpay) {
+      this.scriptLoaded = true;
+      return;
+    }
+    
+    // Check if script tag already exists
+    const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+    if (existingScript) {
+      // Wait for it to load
+      existingScript.addEventListener('load', () => {
+        this.scriptLoaded = true;
+      });
+      return;
+    }
+    
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
+    script.crossOrigin = 'anonymous';
     script.onload = () => {
       this.scriptLoaded = true;
+      console.log('✅ Razorpay script loaded successfully');
     };
     script.onerror = (error) => {
       console.error('Failed to load Razorpay script:', error);
+      // Retry after a delay
+      setTimeout(() => {
+        if (!this.scriptLoaded) {
+          console.log('🔄 Retrying Razorpay script load...');
+          this.loadRazorpayScript();
+        }
+      }, 2000);
     };
-    document.body.appendChild(script);
+    document.head.appendChild(script);
   }
 
   public static getInstance(): RazorpayService {
@@ -79,6 +160,9 @@ export class RazorpayService {
       }
       const plan = SUBSCRIPTION_PLANS.find(p => p.id === planId);
       if (!plan) throw new Error('Invalid plan selected');
+      if (plan.price === null || plan.price === undefined) {
+        throw new Error('This plan does not support direct payment. Please contact us for pricing.');
+      }
       // Razorpay expects amount in paise, so multiply by 100
       const amountInPaise = Math.round(plan.price * 100);
       const response = await api.post('/payment/create-order', {
@@ -263,6 +347,137 @@ export class RazorpayService {
       });
     } catch (error) {
       console.error('Error verifying payment or creating subscription:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Initialize subscription checkout for a plan
+   * @param planId - Internal plan ID (e.g., 'pro', 'team')
+   * @param userEmail - User's email address
+   * @param userId - User's unique identifier
+   * @param billingCycle - 'monthly' or 'yearly'
+   * @param customerName - Optional customer name
+   * @param customerContact - Optional customer contact number
+   */
+  public async initializeSubscription(
+    planId: string,
+    userEmail: string,
+    userId: string,
+    billingCycle: 'monthly' | 'yearly' = 'monthly',
+    customerName?: string,
+    customerContact?: string
+  ): Promise<void> {
+    try {
+      if (!this.isInitialized) {
+        throw new Error('Payment is not available. Please check your configuration.');
+      }
+      await this.waitForRazorpayScript();
+      if (typeof window === 'undefined' || !window.Razorpay) {
+        throw new Error('Razorpay SDK not loaded');
+      }
+
+      const plan = SUBSCRIPTION_PLANS.find(p => p.id === planId);
+      if (!plan) {
+        throw new Error('Invalid plan selected');
+      }
+
+      // Create subscription checkout on backend
+      const checkoutResponse = await api.post('/subscription/checkout', {
+        userId,
+        planId,
+        billingCycle,
+        customerEmail: userEmail,
+        customerName,
+        customerContact
+      });
+
+      if (!checkoutResponse.data.success) {
+        throw new Error(checkoutResponse.data.error || 'Failed to create subscription checkout');
+      }
+
+      const { subscription_id, razorpay_plan_id, checkout_url } = checkoutResponse.data.data;
+
+      // If checkout_url is provided, redirect to it
+      if (checkout_url) {
+        window.location.href = checkout_url;
+        return;
+      }
+
+      // Otherwise, use Razorpay subscription checkout modal
+      return new Promise<void>((resolve, reject) => {
+        const options = {
+          key: this.razorpayKeyId,
+          subscription_id: subscription_id,
+          name: 'In3D.Ai',
+          description: `Subscribe to ${plan.name} Plan (${billingCycle})`,
+          prefill: {
+            email: userEmail,
+            name: customerName,
+            contact: customerContact
+          },
+          handler: async (response: any) => {
+            try {
+              // Subscription created successfully
+              await this.handleSubscriptionSuccess(response, userId, planId, subscription_id);
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          },
+          modal: {
+            ondismiss: () => reject(new Error('Subscription cancelled')),
+            confirm_close: true,
+            escape: true,
+            handleback: true
+          },
+          theme: { color: '#3B82F6' }
+        };
+
+        try {
+          const rzp = new window.Razorpay(options);
+
+          // Add event listeners
+          rzp.on('payment.failed', (response: any) => {
+            console.error('Subscription payment failed:', response.error);
+            reject(new Error(`Payment failed: ${response.error.description || 'Unknown error'}`));
+          });
+
+          rzp.on('payment.cancelled', () => {
+            reject(new Error('Subscription was cancelled by user'));
+          });
+
+          rzp.open();
+        } catch (error) {
+          console.error('Error opening Razorpay subscription modal:', error);
+          reject(new Error('Failed to open subscription modal. Please try again.'));
+        }
+      });
+    } catch (error) {
+      console.error('Subscription initialization error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle successful subscription creation
+   */
+  private async handleSubscriptionSuccess(
+    response: any,
+    userId: string,
+    planId: string,
+    razorpaySubscriptionId: string
+  ): Promise<void> {
+    try {
+      // Create/update subscription in our system
+      await api.post('/subscription/create', {
+        userId,
+        planId,
+        planName: SUBSCRIPTION_PLANS.find(p => p.id === planId)?.name || planId,
+        razorpaySubscriptionId
+      });
+    } catch (error) {
+      console.error('Error creating subscription record:', error);
       throw error;
     }
   }

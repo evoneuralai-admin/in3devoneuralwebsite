@@ -27,6 +27,7 @@ const Header = () => {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const dropdownRef = useRef(null);
   const mobileMenuRef = useRef(null);
+  const mobileMenuButtonRef = useRef(null);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [subscription, setSubscription] = useState(null);
@@ -56,10 +57,17 @@ const Header = () => {
 
   useEffect(() => {
     const handleClickOutside = (event) => {
+      // Close dropdown if clicking outside
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
         setShowDropdown(false);
       }
-      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target)) {
+      // Close mobile menu if clicking outside (excluding the menu button)
+      if (
+        mobileMenuRef.current && 
+        !mobileMenuRef.current.contains(event.target) &&
+        mobileMenuButtonRef.current &&
+        !mobileMenuButtonRef.current.contains(event.target)
+      ) {
         setShowMobileMenu(false);
       }
     };
@@ -149,22 +157,24 @@ const Header = () => {
       orange: 'bg-orange-500/20 text-orange-300 border-orange-500/30 shadow-orange-500/10',
       emerald: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 shadow-emerald-500/10',
       purple: 'bg-purple-500/20 text-purple-300 border-purple-500/30 shadow-purple-500/10',
+      violet: 'bg-violet-500/20 text-violet-300 border-violet-500/30 shadow-violet-500/10',
     };
 
     return (
       <Link
         to={to}
         className={`
-          px-4 py-2 rounded-xl text-sm font-medium transition-all duration-300
-          flex items-center gap-2
+          px-2 sm:px-3 lg:px-4 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all duration-300
+          flex items-center gap-1.5 sm:gap-2
           ${isActive 
             ? `${colorClasses[activeColor]} border shadow-lg` 
             : 'text-gray-400 hover:text-white hover:bg-white/[0.05]'
           }
         `}
+        title={label}
       >
         {icon}
-        <span>{label}</span>
+        <span className="hidden xl:inline">{label}</span>
       </Link>
     );
   };
@@ -186,22 +196,22 @@ const Header = () => {
             {/* Subtle gradient overlay - contained within nav with its own overflow handling */}
             <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.02] via-transparent to-purple-500/[0.02] pointer-events-none rounded-2xl overflow-hidden" />
             
-            <div className="relative flex items-center justify-between">
+            <div className="relative flex items-center justify-between gap-2 sm:gap-4">
               {/* Left Section - Logo & Nav */}
-              <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2 sm:gap-4 lg:gap-6 min-w-0 flex-1">
                 {/* Logo with traffic lights */}
-                <Link to="/" className="flex items-center gap-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400/70" />
-                    <span className="w-2.5 h-2.5 rounded-full bg-red-500/70" />
+                <Link to="/" className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-1 sm:gap-1.5">
+                    <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-500/80 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                    <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-amber-400/70" />
+                    <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-red-500/70" />
                   </div>
                   <Logo />
                 </Link>
 
                 {/* Desktop Navigation */}
                 {user && (
-                  <div className="hidden lg:flex items-center gap-1">
+                  <div className="hidden lg:flex items-center gap-0.5 xl:gap-1 flex-wrap min-w-0">
                     <NavLink
                       to="/main"
                       label="Create"
@@ -246,25 +256,37 @@ const Header = () => {
                         </svg>
                       }
                     />
+                    <NavLink
+                      to="/pricing"
+                      label="Pricing"
+                      isActive={isActivePath('/pricing')}
+                      activeColor="violet"
+                      icon={
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      }
+                    />
                   </div>
                 )}
               </div>
 
               {/* Right Section - User Actions */}
-              <div className="hidden md:flex items-center gap-3">
+              <div className="hidden md:flex items-center gap-2 lg:gap-3 flex-shrink-0">
                 {user ? (
                   <>
                     {/* Usage Stats Pill */}
-                    <div className="flex items-center gap-3 px-4 py-2 bg-[#1a1a1a] rounded-xl border border-[#2a2a2a]">
+                    <div className="flex items-center gap-2 lg:gap-3 px-2 sm:px-3 lg:px-4 py-2 bg-[#1a1a1a] rounded-xl border border-[#2a2a2a]">
                       <div className="flex flex-col items-end">
-                        <span className={`text-[10px] font-semibold uppercase tracking-widest px-2 py-0.5 rounded-full border ${getPlanBadgeStyles()}`}>
-                          {getCurrentPlan()?.name || 'Free'} Plan
+                        <span className={`text-[9px] sm:text-[10px] font-semibold uppercase tracking-widest px-1.5 sm:px-2 py-0.5 rounded-full border ${getPlanBadgeStyles()}`}>
+                          <span className="hidden lg:inline">{getCurrentPlan()?.name || 'Free'} Plan</span>
+                          <span className="lg:hidden">{getCurrentPlan()?.name?.[0] || 'F'}</span>
                         </span>
                       </div>
                       
                       {getCurrentPlan()?.limits.skyboxGenerations !== Infinity && (
-                        <div className="flex items-center gap-2 pl-3 border-l border-[#333]">
-                          <div className="w-20 h-1.5 rounded-full bg-[#252525] overflow-hidden">
+                        <div className="flex items-center gap-1.5 lg:gap-2 pl-2 lg:pl-3 border-l border-[#333]">
+                          <div className="w-12 sm:w-16 lg:w-20 h-1.5 rounded-full bg-[#252525] overflow-hidden">
                             <div 
                               className={`h-full transition-all duration-500 rounded-full ${
                                 getUsagePercentage() > 80 
@@ -274,7 +296,7 @@ const Header = () => {
                               style={{ width: `${getUsagePercentage()}%` }}
                             />
                           </div>
-                          <span className="text-[11px] text-gray-400 tabular-nums whitespace-nowrap">
+                          <span className="text-[10px] sm:text-[11px] text-gray-400 tabular-nums whitespace-nowrap hidden xl:inline">
                             {getCurrentUsage()}/{getCurrentLimit()} used
                           </span>
                         </div>
@@ -286,21 +308,21 @@ const Header = () => {
                       <button
                         onClick={handleUpgradeClick}
                         className="
-                          flex items-center gap-2
-                          px-4 py-2 rounded-xl
+                          flex items-center gap-1.5 lg:gap-2
+                          px-2 sm:px-3 lg:px-4 py-2 rounded-xl
                           bg-gradient-to-r from-violet-500 to-purple-600
                           hover:from-violet-400 hover:to-purple-500
-                          text-white text-xs font-semibold uppercase tracking-wider
+                          text-white text-[10px] sm:text-xs font-semibold uppercase tracking-wider
                           shadow-lg shadow-purple-500/25
                           transition-all duration-300
                           hover:shadow-purple-500/40 hover:scale-[1.02]
                           border border-purple-400/20
                         "
                       >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
-                        <span>Upgrade</span>
+                        <span className="hidden sm:inline">Upgrade</span>
                       </button>
                     )}
 
@@ -309,22 +331,22 @@ const Header = () => {
                       <button
                         onClick={() => setShowDropdown(!showDropdown)}
                         className="
-                          flex items-center gap-3 
-                          px-3 py-2 
+                          flex items-center gap-2 lg:gap-3 
+                          px-2 sm:px-3 py-2 
                           bg-[#1a1a1a] hover:bg-[#222] 
                           border border-[#2a2a2a] hover:border-[#3a3a3a]
                           rounded-xl 
                           transition-all duration-300
                         "
                       >
-                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-400 to-indigo-600 flex items-center justify-center text-white text-sm font-semibold shadow-lg shadow-sky-500/20">
+                        <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-br from-sky-400 to-indigo-600 flex items-center justify-center text-white text-xs sm:text-sm font-semibold shadow-lg shadow-sky-500/20 flex-shrink-0">
                           {profile?.firstName?.[0] || user.email[0].toUpperCase()}
                         </div>
-                        <span className="hidden lg:block text-sm font-medium text-gray-200">
+                        <span className="hidden xl:block text-sm font-medium text-gray-200 truncate max-w-[120px]">
                           {profile?.firstName || user.email.split('@')[0]}
                         </span>
                         <svg
-                          className={`w-4 h-4 text-gray-400 transition-transform duration-300 ${showDropdown ? 'rotate-180' : ''}`}
+                          className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400 transition-transform duration-300 flex-shrink-0 ${showDropdown ? 'rotate-180' : ''}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -345,13 +367,17 @@ const Header = () => {
                           overflow-hidden
                           z-[100]
                         ">
-                          {/* User Info */}
-                          <div className="px-4 py-4 border-b border-[#2a2a2a]">
+                          {/* User Info - Clickable to Profile */}
+                          <Link
+                            to="/profile"
+                            onClick={() => setShowDropdown(false)}
+                            className="px-4 py-4 border-b border-[#2a2a2a] block hover:bg-white/[0.02] transition-colors cursor-pointer"
+                          >
                             <div className="flex items-center gap-3">
                               <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-400 to-indigo-600 flex items-center justify-center text-white text-lg font-semibold shadow-lg shadow-sky-500/20">
                                 {profile?.firstName?.[0] || user.email[0].toUpperCase()}
                               </div>
-                              <div>
+                              <div className="flex-1 min-w-0">
                                 <p className="text-sm font-semibold text-white">
                                   {profile?.firstName || user.email.split('@')[0]}
                                 </p>
@@ -363,7 +389,7 @@ const Header = () => {
                                 {getCurrentPlan()?.name || 'Free'} Plan
                               </span>
                             </div>
-                          </div>
+                          </Link>
 
                           {/* Usage Stats */}
                           <div className="px-4 py-4 border-b border-[#2a2a2a] space-y-3">
@@ -471,6 +497,17 @@ const Header = () => {
                 ) : (
                   <div className="flex items-center gap-3">
                     <NavLink
+                      to="/pricing"
+                      label="Pricing"
+                      isActive={isActivePath('/pricing')}
+                      activeColor="violet"
+                      icon={
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      }
+                    />
+                    <NavLink
                       to="/careers"
                       label="Careers"
                       isActive={isActivePath('/careers')}
@@ -516,15 +553,21 @@ const Header = () => {
               </div>
 
               {/* Mobile Menu Button */}
-              <div className="md:hidden">
+              <div className="md:hidden flex-shrink-0">
                 <button
-                  onClick={() => setShowMobileMenu(!showMobileMenu)}
+                  ref={mobileMenuButtonRef}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMobileMenu(!showMobileMenu);
+                  }}
                   className="
                     p-2 rounded-xl 
                     bg-[#1a1a1a] border border-[#2a2a2a]
                     text-gray-400 hover:text-white
                     transition-colors
                   "
+                  aria-label={showMobileMenu ? "Close menu" : "Open menu"}
+                  aria-expanded={showMobileMenu}
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     {showMobileMenu ? (
@@ -614,6 +657,23 @@ const Header = () => {
                       History
                     </Link>
 
+                    <Link
+                      to="/pricing"
+                      className={`
+                        flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all
+                        ${isActivePath('/pricing') 
+                          ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30' 
+                          : 'text-gray-300 hover:bg-white/[0.05]'
+                        }
+                      `}
+                      onClick={() => setShowMobileMenu(false)}
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Pricing
+                    </Link>
+
                     {/* Mobile User Info */}
                     <div className="mt-4 pt-4 border-t border-[#2a2a2a]">
                       <div className="px-4 py-3 bg-[#1a1a1a] rounded-xl">
@@ -670,6 +730,22 @@ const Header = () => {
                 ) : (
                   <>
                     <Link
+                      to="/pricing"
+                      className={`
+                        flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all
+                        ${isActivePath('/pricing') 
+                          ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30' 
+                          : 'text-gray-300 hover:bg-white/[0.05]'
+                        }
+                      `}
+                      onClick={() => setShowMobileMenu(false)}
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Pricing
+                    </Link>
+                    <Link
                       to="/careers"
                       className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-gray-300 hover:bg-white/[0.05] transition-all"
                       onClick={() => setShowMobileMenu(false)}
@@ -707,8 +783,6 @@ const Header = () => {
         </div>
       </header>
 
-      {/* Spacer for fixed header */}
-      <div className="h-20" />
 
       {/* Modals */}
       <SubscriptionModal

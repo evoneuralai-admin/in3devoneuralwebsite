@@ -450,26 +450,7 @@ export class UnifiedStorageService {
         return await response.blob();
       },
       
-      // Strategy 2: Local development server proxy (for development)
-      async () => {
-        const localProxy = `http://localhost:5002/proxy-asset?url=${encodeURIComponent(url)}`;
-        console.log('🔄 Fetching via local development proxy:', localProxy);
-        const response = await fetch(localProxy, {
-          method: 'GET',
-          headers: {
-            'Accept': '*/*',
-            'User-Agent': 'In3D.ai-WebApp/1.0'
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Local proxy fetch failed: ${response.status} ${response.statusText}`);
-        }
-        
-        return await response.blob();
-      },
-      
-      // Strategy 3: Direct URL (last resort - will likely fail due to CORS)
+      // Strategy 2: Direct URL (last resort - will likely fail due to CORS)
       async () => {
         console.log('🔄 Fetching direct URL (last resort):', url);
         const response = await fetch(url, {

@@ -18,10 +18,18 @@ export const getApiBaseUrl = (): string => {
     return 'http://localhost:5001/in3devoneuralai/us-central1/api';
   }
   
-  // Use Firebase Functions in production
+  // In preview channels or production, use Firebase Functions
+  // Preview channels share the same Firebase Functions as production
   const region = 'us-central1';
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || 'in3devoneuralai';
-  return `https://${region}-${projectId}.cloudfunctions.net/api`;
+  const functionsUrl = `https://${region}-${projectId}.cloudfunctions.net/api`;
+  
+  // Log for debugging in preview environments
+  if (typeof window !== 'undefined' && window.location.hostname.includes('--')) {
+    console.log('🔍 Preview environment detected, using API:', functionsUrl);
+  }
+  
+  return functionsUrl;
 };
 
 /**

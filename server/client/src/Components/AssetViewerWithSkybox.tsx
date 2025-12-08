@@ -1,6 +1,6 @@
 import React, { Suspense, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useTexture, Html, useProgress, Sphere } from '@react-three/drei';
+import { OrbitControls, Html, useProgress, Sphere } from '@react-three/drei';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
@@ -30,16 +30,95 @@ function Loader() {
   );
 }
 
-// Skybox sphere component
+// Skybox sphere component with CORS handling
 function SkyboxSphere({ imageUrl }: { imageUrl: string }) {
-  const texture = useTexture(imageUrl);
-  
+  const [texture, setTexture] = React.useState<THREE.Texture | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
   React.useEffect(() => {
-    if (texture) {
-      texture.mapping = THREE.EquirectangularReflectionMapping;
-      texture.colorSpace = THREE.SRGBColorSpace;
-    }
-  }, [texture]);
+    if (!imageUrl) return;
+
+    const loadTexture = async () => {
+      try {
+        const loader = new THREE.TextureLoader();
+        
+        // Try different loading strategies for skybox textures
+        const apiBaseUrl = getApiBaseUrl();
+        const strategies = [
+          // Strategy 1: Direct loading (skyboxes usually work fine)
+          () => imageUrl,
+          // Strategy 2: Proxy if direct fails (use correct API base URL)
+          () => `${apiBaseUrl}/proxy-asset?url=${encodeURIComponent(imageUrl)}`
+        ];
+
+        let loadedTexture: THREE.Texture | null = null;
+        let lastError: Error | null = null;
+
+        for (const strategy of strategies) {
+          try {
+            const url = strategy();
+            console.log('🔄 Loading skybox texture via:', url);
+            
+            loadedTexture = await new Promise<THREE.Texture>((resolve, reject) => {
+              loader.load(
+                url,
+                (texture) => {
+                  // Configure texture
+                  texture.mapping = THREE.EquirectangularReflectionMapping;
+                  texture.colorSpace = THREE.SRGBColorSpace;
+                  texture.minFilter = THREE.LinearFilter;
+                  texture.magFilter = THREE.LinearFilter;
+                  texture.generateMipmaps = false;
+                  resolve(texture);
+                },
+                undefined,
+                (error) => reject(error)
+              );
+            });
+
+            console.log('✅ Skybox texture loaded successfully');
+            break;
+          } catch (err) {
+            console.warn('⚠️ Skybox loading strategy failed:', err);
+            lastError = err instanceof Error ? err : new Error('Unknown error');
+          }
+        }
+
+        if (loadedTexture) {
+          setTexture(loadedTexture);
+          setError(null);
+        } else {
+          throw lastError || new Error('All skybox loading strategies failed');
+        }
+      } catch (err) {
+        console.error('Failed to load skybox texture:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        setError(errorMessage);
+      }
+    };
+
+    loadTexture();
+  }, [imageUrl]);
+
+  if (error) {
+    // Fallback to black skybox on error
+    return (
+      <mesh>
+        <sphereGeometry args={[500, 64, 64]} />
+        <meshBasicMaterial color="#000000" side={THREE.BackSide} />
+      </mesh>
+    );
+  }
+
+  if (!texture) {
+    // Show loading state
+    return (
+      <mesh>
+        <sphereGeometry args={[500, 64, 64]} />
+        <meshBasicMaterial color="#1a1a1a" side={THREE.BackSide} />
+      </mesh>
+    );
+  }
 
   return (
     <Sphere args={[500, 64, 64]} scale={[-1, 1, 1]}>
@@ -116,26 +195,65 @@ function AssetModel({
           loaderRef.current = { gltfLoader, dracoLoader };
         }
 
-        // Try multiple loading strategies
+        // Try multiple loading strategies - prioritize proxy first (direct will fail due to CORS)
         const apiBaseUrl = getApiBaseUrl();
+        const proxyUrl = `${apiBaseUrl}/proxy-asset?url=${encodeURIComponent(assetUrl)}`;
+        
+        console.log('🔄 Loading 3D model:', {
+          originalUrl: assetUrl,
+          proxyUrl: proxyUrl,
+          apiBaseUrl: apiBaseUrl
+        });
+        
         const strategies = [
-          assetUrl,
-          `${apiBaseUrl}/proxy-asset?url=${encodeURIComponent(assetUrl)}`,
-          `http://localhost:5002/proxy-asset?url=${encodeURIComponent(assetUrl)}`,
+          // Strategy 1: Proxy first (will work due to CORS bypass)
+          () => proxyUrl,
+          // Strategy 2: Direct URL (will likely fail due to CORS, but try anyway)
+          () => assetUrl
         ];
 
         let loadedGltf = null;
         let lastError = null;
 
-        for (const url of strategies) {
+        for (const strategy of strategies) {
           try {
+            const url = strategy();
+            console.log('🔄 Trying to load 3D model from:', url);
+            
             loadedGltf = await new Promise<any>((resolve, reject) => {
-              loaderRef.current!.gltfLoader.load(url, resolve, undefined, reject);
+              const timeout = setTimeout(() => {
+                reject(new Error('3D model loading timeout after 30 seconds'));
+              }, 30000);
+              
+              loaderRef.current!.gltfLoader.load(
+                url,
+                (gltf) => {
+                  clearTimeout(timeout);
+                  console.log('✅ 3D model loaded successfully from:', url);
+                  resolve(gltf);
+                },
+                (progress) => {
+                  if (progress.lengthComputable) {
+                    const percent = (progress.loaded / progress.total) * 100;
+                    console.log(`📦 Loading progress: ${percent.toFixed(1)}%`);
+                  }
+                },
+                (error) => {
+                  clearTimeout(timeout);
+                  console.error('❌ GLTFLoader error:', error);
+                  reject(error);
+                }
+              );
             });
-            break;
+            
+            if (loadedGltf) {
+              console.log('✅ Successfully loaded 3D model');
+              break;
+            }
           } catch (err) {
             lastError = err;
-            console.warn('Load strategy failed:', url);
+            console.warn('⚠️ Load strategy failed:', err);
+            // Continue to next strategy
           }
         }
 

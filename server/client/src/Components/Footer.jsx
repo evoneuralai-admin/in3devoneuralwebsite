@@ -77,106 +77,69 @@ function Footer() {
     }
   ];
 
+  // Additional link categories inspired by meshy.ai structure
+  const productLinks = [
+    { name: "3D Model Generation", url: "/3d-generate" },
+    { name: "Skybox Creation", url: "/main" },
+    { name: "Explore Gallery", url: "/explore" },
+    { name: "Generation History", url: "/history" },
+  ];
+
+  const companyLinks = [
+    { name: "About Us", url: "/about" },
+    { name: "Careers", url: "/careers" },
+    { name: "Blog", url: "/blog" },
+    { name: "Contact", url: "/contact" },
+  ];
+
+  const resourcesLinks = [
+    { name: "Documentation", url: "/docs" },
+    { name: "API Reference", url: "/api-docs" },
+    { name: "Tutorials", url: "/tutorials" },
+    { name: "Support", url: "/support" },
+  ];
+
   return (
-    <footer className="bg-gray-900/90 backdrop-blur-xl border-t border-gray-800/50">
-      <div className="container mx-auto px-4 py-8">
-        {/* Main Footer Content */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 mb-8">
-          
-          {/* Company Info */}
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-xl font-bold text-white mb-3">In3D.AI</h3>
-              <p className="text-gray-400 text-sm leading-relaxed">
-                Powered by Evoneural Artificial Intelligence OPC. 
-                Transforming ideas into stunning 3D assets with AI-powered generation.
+    <footer className="relative z-50 backdrop-blur-md bg-[#141414]/80 border-t border-[#262626]">
+      <div className="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8 py-12 lg:py-10">
+        {/* Top Section - Social Media Icons (Meshy.ai style) */}
+        <div className="mb-12 lg:mb-16">
+          <div className="flex flex-col items-center gap-6">
+            {/* Logo and Tagline */}
+            <div className="flex flex-col items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500/80 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                  <span className="w-2 h-2 rounded-full bg-amber-400/70" />
+                  <span className="w-2 h-2 rounded-full bg-red-500/70" />
+                </div>
+                <h3 className="text-2xl font-bold text-white tracking-tight">In3D.AI</h3>
+              </div>
+              <p className="text-gray-400 text-sm text-center max-w-md">
+                Powered by Evoneural Artificial Intelligence OPC
               </p>
             </div>
-            
-            {/* Contact Info */}
-            <div className="space-y-3">
-              <div className="flex items-start space-x-3">
-                <FaMapMarkerAlt className="w-5 h-5 text-cyan-400 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-white text-sm font-medium">Company Address</p>
-                  <a 
-                    href="https://maps.app.goo.gl/bwU2obL3gJEnGruo9" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-gray-400 text-sm hover:text-cyan-400 transition-colors"
-                  >
-                    Third Floor, Bhamashah Technohub<br />
-                    Sansthan Path, Malviya Nagar<br />
-                    Jaipur, Rajasthan, India
-                  </a>
-                </div>
-              </div>
-              
-              <div className="flex items-center space-x-3">
-                <FaWhatsapp className="w-5 h-5 text-green-400 flex-shrink-0" />
-                <div>
-                  <p className="text-white text-sm font-medium">WhatsApp</p>
-                  <a 
-                    href="https://wa.me/917023310122" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-gray-400 text-sm hover:text-green-400 transition-colors"
-                  >
-                    +91 7023310122
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
 
-          {/* Quick Links */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white mb-4">Quick Links</h3>
-            <div className="space-y-3">
-              {quickLinks.map((link) => (
-                <Link
-                  key={link.name}
-                  to={link.url}
-                  className="flex items-center space-x-3 text-gray-400 hover:text-white transition-colors group"
-                >
-                  <link.icon className="w-4 h-4 text-cyan-400 group-hover:text-cyan-300" />
-                  <span className="text-sm">{link.name}</span>
-                </Link>
-              ))}
-            </div>
-          </div>
-
-          {/* Services */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white mb-4">Services</h3>
-            <div className="space-y-3">
-              <div className="text-gray-400 text-sm">
-                <p className="font-medium text-white mb-2">AI-Powered 3D Generation</p>
-                <ul className="space-y-1 text-xs">
-                  <li>• 3D Model Creation</li>
-                  <li>• Character Design</li>
-                  <li>• Environment Building</li>
-                  <li>• Asset Export (FBX, OBJ, GLTF)</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          {/* Social Media */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white mb-4">Connect With Us</h3>
-            <div className="grid grid-cols-3 gap-3">
+            {/* Social Media Icons Row */}
+            <div className="flex items-center justify-center gap-4 flex-wrap">
               {socialLinks.map((social) => (
                 social.name === "Blog" ? (
                   <button
                     key={social.name}
                     onClick={() => navigate('/blog')}
-                    className={`flex flex-col items-center p-3 rounded-lg bg-gray-800/50 border border-gray-700/50 text-gray-400 transition-all duration-300 hover:border-cyan-500/50 hover:bg-gray-800/70 ${social.color}`}
+                    className="
+                      w-10 h-10 
+                      flex items-center justify-center
+                      rounded-lg
+                      text-gray-400 hover:text-white
+                      hover:bg-white/[0.05]
+                      transition-all duration-300
+                      group
+                    "
                     title={social.name}
                     type="button"
                   >
-                    <social.icon className="w-5 h-5 mb-1" />
-                    <span className="text-xs text-center">{social.name}</span>
+                    <social.icon className="w-5 h-5 group-hover:scale-110 transition-transform" />
                   </button>
                 ) : (
                   <a
@@ -184,71 +147,187 @@ function Footer() {
                     href={social.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`flex flex-col items-center p-3 rounded-lg bg-gray-800/50 border border-gray-700/50 text-gray-400 transition-all duration-300 hover:border-cyan-500/50 hover:bg-gray-800/70 ${social.color}`}
+                    className="
+                      w-10 h-10 
+                      flex items-center justify-center
+                      rounded-lg
+                      text-gray-400 hover:text-white
+                      hover:bg-white/[0.05]
+                      transition-all duration-300
+                      group
+                    "
                     title={social.name}
                   >
-                    <social.icon className="w-5 h-5 mb-1" />
-                    <span className="text-xs text-center">{social.name}</span>
+                    <social.icon className="w-5 h-5 group-hover:scale-110 transition-transform" />
                   </a>
                 )
               ))}
             </div>
           </div>
+        </div>
 
-          {/* Service Status */}
+        {/* Main Footer Content - Link Columns (Meshy.ai style) */}
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-8 lg:gap-12 mb-12">
+          
+          {/* Product Links */}
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white mb-4">Service Status</h3>
-            <div className="space-y-3">
-              <button
-                onClick={() => navigate('/system-status?tab=system-status')}
-                className="flex items-center space-x-3 text-gray-400 hover:text-white transition-colors group w-full"
-              >
-                <FaServer className="w-4 h-4 text-cyan-400 group-hover:text-cyan-300" />
-                <span className="text-sm">System Status</span>
-              </button>
-              <button
-                onClick={() => navigate('/system-status?tab=test-panel')}
-                className="flex items-center space-x-3 text-gray-400 hover:text-white transition-colors group w-full"
-              >
-                <FaWifi className="w-4 h-4 text-green-400 group-hover:text-green-300" />
-                <span className="text-sm">Test Panel</span>
-              </button>
-              <button
-                onClick={() => navigate('/system-status?tab=debug-panel')}
-                className="flex items-center space-x-3 text-gray-400 hover:text-white transition-colors group w-full"
-              >
-                <FaCog className="w-4 h-4 text-yellow-400 group-hover:text-yellow-300" />
-                <span className="text-sm">Debug Panel</span>
-              </button>
-            </div>
+            <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+              Product
+            </h3>
+            <ul className="space-y-3">
+              {productLinks.map((link) => (
+                <li key={link.name}>
+                  <Link
+                    to={link.url}
+                    className="text-sm text-gray-400 hover:text-white transition-colors duration-200"
+                  >
+                    {link.name}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Company Links */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+              Company
+            </h3>
+            <ul className="space-y-3">
+              {companyLinks.map((link) => (
+                <li key={link.name}>
+                  {link.name === "Blog" ? (
+                    <button
+                      onClick={() => navigate(link.url)}
+                      className="text-sm text-gray-400 hover:text-white transition-colors duration-200 text-left"
+                    >
+                      {link.name}
+                    </button>
+                  ) : (
+                    <Link
+                      to={link.url}
+                      className="text-sm text-gray-400 hover:text-white transition-colors duration-200"
+                    >
+                      {link.name}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Resources Links */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+              Resources
+            </h3>
+            <ul className="space-y-3">
+              {resourcesLinks.map((link) => (
+                <li key={link.name}>
+                  <Link
+                    to={link.url}
+                    className="text-sm text-gray-400 hover:text-white transition-colors duration-200"
+                  >
+                    {link.name}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Legal Links */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+              Legal
+            </h3>
+            <ul className="space-y-3">
+              {quickLinks.map((link) => (
+                <li key={link.name}>
+                  <Link
+                    to={link.url}
+                    className="text-sm text-gray-400 hover:text-white transition-colors duration-200"
+                  >
+                    {link.name}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Service Status & Contact */}
+          <div className="space-y-4 col-span-2 md:col-span-1">
+            <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-4">
+              Services
+            </h3>
+            <ul className="space-y-3">
+              <li>
+                <button
+                  onClick={() => navigate('/system-status?tab=system-status')}
+                  className="text-sm text-gray-400 hover:text-white transition-colors duration-200 text-left"
+                >
+                  System Status
+                </button>
+              </li>
+              <li>
+                <button
+                  onClick={() => navigate('/system-status?tab=test-panel')}
+                  className="text-sm text-gray-400 hover:text-white transition-colors duration-200 text-left"
+                >
+                  Test Panel
+                </button>
+              </li>
+              <li>
+                <button
+                  onClick={() => navigate('/system-status?tab=debug-panel')}
+                  className="text-sm text-gray-400 hover:text-white transition-colors duration-200 text-left"
+                >
+                  Debug Panel
+                </button>
+              </li>
+              <li className="pt-2">
+                <a
+                  href="https://wa.me/917023310122"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-gray-400 hover:text-emerald-400 transition-colors duration-200 flex items-center gap-2"
+                >
+                  <FaWhatsapp className="w-4 h-4" />
+                  WhatsApp Support
+                </a>
+              </li>
+            </ul>
           </div>
         </div>
 
-        {/* Bottom Bar */}
-        <div className="border-t border-gray-800/50 pt-6">
-          <div className="flex flex-col md:flex-row items-center justify-between space-y-4 md:space-y-0">
+        {/* Bottom Bar - Copyright and Legal (Meshy.ai style) */}
+        <div className="border-t border-[#262626] pt-8">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            {/* Copyright */}
             <div className="text-center md:text-left">
-              <p className="text-gray-400 text-sm">
-                © {currentYear} In3D.AI | Evoneural Artificial Intelligence OPC. All rights reserved.
+              <p className="text-xs text-gray-500 font-medium">
+                © {currentYear} <span className="text-white">In3D.AI</span> | Evoneural Artificial Intelligence OPC. All rights reserved.
               </p>
             </div>
             
-            <div className="flex items-center space-x-6">
+            {/* Legal Links Row */}
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
               <Link 
                 to="/privacy-policy" 
-                className="text-gray-400 hover:text-white text-sm transition-colors"
+                className="text-xs text-gray-500 hover:text-white font-medium transition-colors duration-200 uppercase tracking-wide"
               >
                 Privacy Policy
               </Link>
+              <span className="text-gray-600">|</span>
               <Link 
                 to="/terms-conditions" 
-                className="text-gray-400 hover:text-white text-sm transition-colors"
+                className="text-xs text-gray-500 hover:text-white font-medium transition-colors duration-200 uppercase tracking-wide"
               >
                 Terms & Conditions
               </Link>
+              <span className="text-gray-600">|</span>
               <Link
                 to="/3d-generate"
-                className="ml-4 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow transition-all duration-200"
+                className="text-xs text-gray-500 hover:text-cyan-400 font-medium transition-colors duration-200 uppercase tracking-wide"
               >
                 Generate 3D Asset
               </Link>

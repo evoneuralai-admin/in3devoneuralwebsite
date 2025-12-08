@@ -1,27 +1,11 @@
 import axios from 'axios';
 import { auth } from './firebase';
-
-// API base URL - use environment variable or fallback to defaults
-const getApiBaseUrl = () => {
-  // Check for explicit API base URL from environment
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
-  }
-  
-  // Use local backend in development
-  if (import.meta.env.DEV) {
-    return 'http://localhost:5001/in3devoneuralai/us-central1/api';
-  }
-  
-  // Use Firebase Functions in production
-  const region = 'us-central1';
-  const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || 'in3devoneuralai';
-  return `https://${region}-${projectId}.cloudfunctions.net/api`;
-};
+import { getApiBaseUrl } from '../utils/apiConfig';
 
 const api = axios.create({
   baseURL: getApiBaseUrl(),
   withCredentials: false,
+  timeout: 30000, // 30 second timeout for API calls
 });
 
 // Add request interceptor to include Firebase auth token
@@ -34,10 +18,29 @@ api.interceptors.request.use(async (config) => {
     }
   } catch (error) {
     console.error('Error getting auth token:', error);
+    // Don't block the request if token fetch fails - some endpoints are public
   }
   return config;
 }, (error) => {
   return Promise.reject(error);
 });
+
+// Add response interceptor for better error handling
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // Log error details for debugging, especially in preview environments
+    const isPreviewEnv = typeof window !== 'undefined' && window.location.hostname.includes('--');
+    if (isPreviewEnv) {
+      console.warn('🔍 Preview environment API error:', {
+        url: error.config?.url,
+        baseURL: error.config?.baseURL,
+        status: error.response?.status,
+        message: error.message
+      });
+    }
+    return Promise.reject(error);
+  }
+);
 
 export default api; 

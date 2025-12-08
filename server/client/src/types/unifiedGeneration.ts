@@ -33,6 +33,14 @@ export interface MeshResult {
   error?: string;
   createdAt: string;
   updatedAt: string;
+  // Include model_urls from Meshy API (GLB, FBX, OBJ, USDZ URLs)
+  model_urls?: {
+    glb?: string;
+    fbx?: string;
+    obj?: string;
+    usdz?: string;
+    mtl?: string;
+  };
   metadata?: {
     polycount?: number;
     size?: number;

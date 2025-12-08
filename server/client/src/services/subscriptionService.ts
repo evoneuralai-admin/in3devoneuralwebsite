@@ -274,6 +274,58 @@ class SubscriptionService {
     return response.data;
   }
 
+  // Get subscription from backend API (with Razorpay sync)
+  async getUserSubscriptionFromAPI(userId: string): Promise<UserSubscription> {
+    try {
+      const response = await api.get(`/subscription/user/${userId}`);
+      if (response.data.success) {
+        return response.data.data;
+      }
+      throw new Error(response.data.error || 'Failed to fetch subscription');
+    } catch (error) {
+      console.error('Error fetching subscription from API:', error);
+      // Fallback to local Firestore
+      return await this.getUserSubscription(userId);
+    }
+  }
+
+  // Sync subscription from Razorpay
+  async syncSubscription(razorpaySubscriptionId: string): Promise<void> {
+    try {
+      await api.post(`/subscription/sync/${razorpaySubscriptionId}`);
+    } catch (error) {
+      console.error('Error syncing subscription:', error);
+      throw error;
+    }
+  }
+
+  // Cancel subscription
+  async cancelSubscription(userId: string, cancelAtPeriodEnd: boolean = true): Promise<void> {
+    try {
+      await api.post('/subscription/cancel', {
+        userId,
+        cancelAtPeriodEnd
+      });
+    } catch (error) {
+      console.error('Error cancelling subscription:', error);
+      throw error;
+    }
+  }
+
+  // Get subscription history
+  async getSubscriptionHistory(userId: string): Promise<any[]> {
+    try {
+      const response = await api.get(`/subscription/${userId}/history`);
+      if (response.data.success) {
+        return response.data.data;
+      }
+      throw new Error(response.data.error || 'Failed to fetch subscription history');
+    } catch (error) {
+      console.error('Error fetching subscription history:', error);
+      throw error;
+    }
+  }
+
   getPlanById(planId: string): SubscriptionPlan | undefined {
     return SUBSCRIPTION_PLANS.find(plan => plan.id === planId);
   }

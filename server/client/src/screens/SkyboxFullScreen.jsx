@@ -3,8 +3,15 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
+// Import centralized API config
+import { getApiBaseUrl } from '../utils/apiConfig';
+
 // API URL for backend calls
-const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002';
+const getApiUrl = () => {
+  const apiBaseUrl = getApiBaseUrl();
+  // Remove /api suffix if present, as this file might need the base URL
+  return apiBaseUrl.replace(/\/api$/, '') || 'http://localhost:5001/in3devoneuralai/us-central1';
+};
 
 // Default skybox data for when no image is available
 const DEFAULT_SKYBOX = {
@@ -34,6 +41,7 @@ const SkyboxFullscreen = ({ isBackground = false, skyboxData = null }) => {
     const fetchStyle = async () => {
       if (!style && id) {
         try {
+          const apiUrl = getApiUrl();
           const response = await fetch(`${apiUrl}/api/skybox/${id}`);
           if (!response.ok) throw new Error("Failed to fetch skybox data");
           const data = await response.json();

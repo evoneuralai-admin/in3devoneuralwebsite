@@ -52,6 +52,10 @@ const Profile = () => {
     setShowUpgradeModal(true);
   };
 
+  const handleManageSubscription = () => {
+    navigate('/pricing');
+  };
+
   useEffect(() => {
     const fetchProfileAndUsage = async () => {
       try {
@@ -130,7 +134,7 @@ const Profile = () => {
           <p className="text-red-400">{error}</p>
           <button
             onClick={() => window.location.reload()}
-            className="mt-4 px-4 py-2 bg-blue-500/20 hover:bg-blue-600/30 text-blue-300 rounded-lg transition-all duration-200 border border-blue-500/30"
+            className="mt-4 px-4 py-2 bg-sky-500/20 hover:bg-sky-600/30 text-sky-300 rounded-xl transition-all duration-200 border border-sky-500/30"
           >
             Retry
           </button>
@@ -142,7 +146,9 @@ const Profile = () => {
 
     return (
       <div className="space-y-6">
-        <div className="bg-gray-800/30 rounded-lg p-6 backdrop-blur-sm border border-gray-700/50">
+        <div className="relative bg-[#141414]/60 rounded-xl p-6 backdrop-blur-0 border border-[#262626] shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
+          <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.01] via-transparent to-purple-500/[0.01] pointer-events-none rounded-xl overflow-hidden" />
+          <div className="relative">
           <div className="flex justify-between items-center mb-4">
             <div>
               <h3 className="text-lg font-medium text-white">Current Plan</h3>
@@ -196,7 +202,7 @@ const Profile = () => {
                   </p>
                   <button
                     onClick={handleUpgradeClick}
-                    className="w-full px-4 py-2 bg-blue-500/20 hover:bg-blue-600/30 text-blue-300 rounded-lg transition-all duration-200 border border-blue-500/30"
+                    className="w-full px-4 py-2 bg-sky-500/20 hover:bg-sky-600/30 text-sky-300 rounded-xl transition-all duration-200 border border-sky-500/30"
                   >
                     Upgrade Plan
                   </button>
@@ -204,14 +210,14 @@ const Profile = () => {
               ) : subscription.planId === 'free' ? (
                 <button
                   onClick={handleUpgradeClick}
-                  className="w-full px-4 py-2 bg-blue-500/20 hover:bg-blue-600/30 text-blue-300 rounded-lg transition-all duration-200 border border-blue-500/30"
+                  className="w-full px-4 py-2 bg-sky-500/20 hover:bg-sky-600/30 text-sky-300 rounded-xl transition-all duration-200 border border-sky-500/30"
                 >
                   Upgrade for Unlimited Generations
                 </button>
               ) : (
                 <button
-                  onClick={handleUpgradeClick}
-                  className="w-full px-4 py-2 bg-blue-500/20 hover:bg-blue-600/30 text-blue-300 rounded-lg transition-all duration-200 border border-blue-500/30"
+                  onClick={handleManageSubscription}
+                  className="w-full px-4 py-2 bg-sky-500/20 hover:bg-sky-600/30 text-sky-300 rounded-xl transition-all duration-200 border border-sky-500/30"
                 >
                   Manage Subscription
                 </button>
@@ -219,8 +225,11 @@ const Profile = () => {
             </div>
           </div>
         </div>
+        </div>
 
-        <div className="bg-gray-800/30 rounded-lg p-6 backdrop-blur-sm border border-gray-700/50">
+        <div className="relative bg-[#141414]/60 rounded-xl p-6 backdrop-blur-0 border border-[#262626] shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
+          <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.01] via-transparent to-purple-500/[0.01] pointer-events-none rounded-xl overflow-hidden" />
+          <div className="relative">
           <h3 className="text-lg font-medium text-white mb-4">Plan Features</h3>
           <ul className="space-y-3">
             {currentPlan.features.map((feature, index) => (
@@ -232,6 +241,7 @@ const Profile = () => {
               </li>
             ))}
           </ul>
+          </div>
         </div>
       </div>
     );
@@ -257,11 +267,22 @@ const Profile = () => {
   }
 
   return (
-    <div className="min-h-screen bg-transparent py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-transparent pt-36 pb-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto">
-        <div className="bg-gray-900/40 backdrop-blur-md rounded-lg shadow-xl border border-gray-700/50">
+        <div className="
+          relative
+          backdrop-blur-0
+          bg-[#141414]/80
+          border border-[#262626]
+          rounded-2xl
+          shadow-[0_8px_32px_rgba(0,0,0,0.4)]
+          overflow-hidden
+        ">
+          {/* Subtle gradient overlay */}
+          <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.02] via-transparent to-purple-500/[0.02] pointer-events-none rounded-2xl overflow-hidden" />
+          
           {/* Profile Header */}
-          <div className="px-6 py-8 border-b border-gray-700/50">
+          <div className="relative px-6 py-8 border-b border-[#262626]">
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-bold text-white">Account Settings</h1>
@@ -279,13 +300,13 @@ const Profile = () => {
           </div>
 
           {/* Navigation Tabs */}
-          <div className="border-b border-gray-700/50">
+          <div className="relative border-b border-[#262626]">
             <nav className="flex px-6" aria-label="Tabs">
               <button
                 onClick={() => setActiveTab('profile')}
-                className={`py-4 px-4 text-sm font-medium border-b-2 -mb-px ${
+                className={`py-4 px-4 text-sm font-medium border-b-2 -mb-px transition-colors duration-200 ${
                   activeTab === 'profile'
-                    ? 'border-blue-500 text-blue-400'
+                    ? 'border-sky-500 text-sky-400'
                     : 'border-transparent text-gray-400 hover:text-gray-300'
                 }`}
               >
@@ -293,9 +314,9 @@ const Profile = () => {
               </button>
               <button
                 onClick={() => setActiveTab('subscription')}
-                className={`ml-8 py-4 px-4 text-sm font-medium border-b-2 -mb-px ${
+                className={`ml-8 py-4 px-4 text-sm font-medium border-b-2 -mb-px transition-colors duration-200 ${
                   activeTab === 'subscription'
-                    ? 'border-blue-500 text-blue-400'
+                    ? 'border-sky-500 text-sky-400'
                     : 'border-transparent text-gray-400 hover:text-gray-300'
                 }`}
               >
@@ -316,7 +337,7 @@ const Profile = () => {
                         type="text"
                         value={formData.firstName}
                         onChange={(e) => setFormData(prev => ({ ...prev, firstName: e.target.value }))}
-                        className="mt-1 block w-full bg-gray-800/30 border border-gray-700/50 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-sm"
+                        className="mt-1 block w-full bg-[#141414]/60 border border-[#262626] rounded-lg shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50 backdrop-blur-0"
                       />
                     </div>
                     <div>
@@ -325,7 +346,7 @@ const Profile = () => {
                         type="text"
                         value={formData.lastName}
                         onChange={(e) => setFormData(prev => ({ ...prev, lastName: e.target.value }))}
-                        className="mt-1 block w-full bg-gray-800/30 border border-gray-700/50 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-sm"
+                        className="mt-1 block w-full bg-[#141414]/60 border border-[#262626] rounded-lg shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50 backdrop-blur-0"
                       />
                     </div>
                     <div>
@@ -334,7 +355,7 @@ const Profile = () => {
                         type="text"
                         value={formData.company}
                         onChange={(e) => setFormData(prev => ({ ...prev, company: e.target.value }))}
-                        className="mt-1 block w-full bg-gray-800/30 border border-gray-700/50 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-sm"
+                        className="mt-1 block w-full bg-[#141414]/60 border border-[#262626] rounded-lg shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50 backdrop-blur-0"
                       />
                     </div>
                     <div>
@@ -343,7 +364,7 @@ const Profile = () => {
                         type="text"
                         value={formData.function}
                         onChange={(e) => setFormData(prev => ({ ...prev, function: e.target.value }))}
-                        className="mt-1 block w-full bg-gray-800/30 border border-gray-700/50 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-sm"
+                        className="mt-1 block w-full bg-[#141414]/60 border border-[#262626] rounded-lg shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50 backdrop-blur-0"
                       />
                     </div>
                     <div>
@@ -352,7 +373,7 @@ const Profile = () => {
                         type="tel"
                         value={formData.phoneNumber}
                         onChange={(e) => setFormData(prev => ({ ...prev, phoneNumber: e.target.value }))}
-                        className="mt-1 block w-full bg-gray-800/30 border border-gray-700/50 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-sm"
+                        className="mt-1 block w-full bg-[#141414]/60 border border-[#262626] rounded-lg shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500/50 backdrop-blur-0"
                       />
                     </div>
                     <div>
@@ -368,7 +389,7 @@ const Profile = () => {
                   <div className="flex justify-end">
                     <button
                       type="submit"
-                      className="px-4 py-2 bg-blue-500/20 hover:bg-blue-600/30 text-blue-300 rounded-lg transition-all duration-200 border border-blue-500/30"
+                      className="px-4 py-2 bg-sky-500/20 hover:bg-sky-600/30 text-sky-300 rounded-xl transition-all duration-200 border border-sky-500/30"
                     >
                       Save Changes
                     </button>

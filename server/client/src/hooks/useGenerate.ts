@@ -215,6 +215,9 @@ export const useGenerate = (): UnifiedGenerationHookResult => {
               style: 'realistic',
               createdAt: completedAsset.createdAt,
               updatedAt: completedAsset.updatedAt,
+              // CRITICAL: Preserve the full model_urls object from Meshy API
+              // This contains GLB, FBX, OBJ, USDZ URLs needed for 3D preview
+              model_urls: status.model_urls || undefined,
               metadata: {
                 polycount: completedAsset.metadata?.polycount,
                 size: completedAsset.metadata?.size,
