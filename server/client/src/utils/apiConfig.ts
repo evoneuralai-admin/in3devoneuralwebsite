@@ -8,14 +8,36 @@
  * @returns The API base URL string
  */
 export const getApiBaseUrl = (): string => {
+  // Detect if we're running on localhost
+  const isLocalhost = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || 
+     window.location.hostname === '127.0.0.1' ||
+     window.location.hostname === '');
+  
   // Check for explicit API base URL from environment
   if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
+    const envUrl = import.meta.env.VITE_API_BASE_URL;
+    
+    // If we're on localhost but env URL is not localhost, log a warning
+    if (isLocalhost && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+      console.warn('⚠️ Running on localhost but VITE_API_BASE_URL points to:', envUrl);
+      console.warn('💡 Consider using: http://localhost:5001/in3devoneuralai/us-central1/api');
+    }
+    
+    // If we're on localhost and env URL is wrong port, use correct localhost URL
+    if (isLocalhost && import.meta.env.DEV && envUrl.includes('localhost:5002')) {
+      console.warn('⚠️ Detected wrong localhost port (5002), using correct port (5001)');
+      return 'http://localhost:5001/in3devoneuralai/us-central1/api';
+    }
+    
+    return envUrl;
   }
   
-  // Use local backend in development
-  if (import.meta.env.DEV) {
-    return 'http://localhost:5001/in3devoneuralai/us-central1/api';
+  // Use local backend in development (especially on localhost)
+  if (import.meta.env.DEV || isLocalhost) {
+    const localhostUrl = 'http://localhost:5001/in3devoneuralai/us-central1/api';
+    console.log('🔧 Development mode detected, using localhost API:', localhostUrl);
+    return localhostUrl;
   }
   
   // In preview channels or production, use Firebase Functions

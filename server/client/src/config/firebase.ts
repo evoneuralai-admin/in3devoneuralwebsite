@@ -88,12 +88,23 @@ const initializeFunctions = () => {
       console.log('✅ Firebase Functions initialized');
       
       // Connect to emulator in development
-      if (import.meta.env.DEV || import.meta.env.VITE_USE_FUNCTIONS_EMULATOR === 'true') {
+      const isLocalhost = typeof window !== 'undefined' && 
+        (window.location.hostname === 'localhost' || 
+         window.location.hostname === '127.0.0.1');
+      
+      const shouldUseEmulator = import.meta.env.DEV || 
+                                import.meta.env.VITE_USE_FUNCTIONS_EMULATOR === 'true' ||
+                                isLocalhost;
+      
+      if (shouldUseEmulator) {
         try {
           connectFunctionsEmulator(functions, 'localhost', 5001);
-          console.log('🔧 Connected to Functions emulator');
-        } catch (error) {
-          console.warn('Functions emulator connection failed:', error);
+          console.log('🔧 Connected to Functions emulator on localhost:5001');
+        } catch (error: any) {
+          // Ignore error if already connected (common when hot-reloading)
+          if (!error.message?.includes('already been called')) {
+            console.warn('Functions emulator connection failed:', error);
+          }
         }
       }
     } catch (error) {

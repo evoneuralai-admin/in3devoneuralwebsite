@@ -82,7 +82,16 @@ export const skyboxApiService = {
       } else if (!error.response) {
         // Network error - provide more helpful message
         const isPreviewEnv = typeof window !== 'undefined' && window.location.hostname.includes('--');
-        if (isPreviewEnv) {
+        const isLocalhost = typeof window !== 'undefined' && 
+                           (window.location.hostname === 'localhost' || 
+                            window.location.hostname === '127.0.0.1');
+        
+        if (isLocalhost && (error.code === 'ERR_CONNECTION_REFUSED' || error.code === 'ERR_NETWORK' || error.message === 'Network Error')) {
+          const errorMessage = 'Firebase Functions emulator is not running. Please start it with: firebase emulators:start';
+          console.error('❌', errorMessage);
+          console.error('💡 Quick fix: Open a terminal and run: firebase emulators:start');
+          throw new Error(errorMessage);
+        } else if (isPreviewEnv) {
           console.warn('⚠️ Preview environment detected - API might be unreachable');
         }
         throw new Error('Network error. Please check your internet connection and API configuration.');

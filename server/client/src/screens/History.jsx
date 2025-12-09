@@ -20,6 +20,69 @@ const History = ({ setBackgroundSkybox }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  // Helper function to validate URLs
+  const isValidUrl = (url) => {
+    if (!url || typeof url !== 'string' || url.trim() === '') {
+      return false;
+    }
+    try {
+      const urlObj = new URL(url);
+      return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+    } catch {
+      // If URL constructor fails, it might still be a relative path or data URL
+      return url.startsWith('/') || url.startsWith('data:') || url.startsWith('blob:');
+    }
+  };
+
+  // Helper function to parse Firestore timestamps
+  const parseTimestamp = (timestamp) => {
+    if (!timestamp) {
+      console.warn('⚠️ parseTimestamp: No timestamp provided');
+      return null; // Return null instead of current date
+    }
+    
+    // If it's a Firestore Timestamp object, convert it
+    if (timestamp && typeof timestamp.toDate === 'function') {
+      const date = timestamp.toDate();
+      console.log('✅ parseTimestamp: Converted Firestore Timestamp to Date:', date);
+      return date;
+    }
+    
+    // If it's a Firestore Timestamp-like object with seconds/nanoseconds
+    if (timestamp && typeof timestamp === 'object' && 'seconds' in timestamp) {
+      const date = new Date(timestamp.seconds * 1000 + (timestamp.nanoseconds || 0) / 1000000);
+      console.log('✅ parseTimestamp: Converted seconds/nanoseconds to Date:', date);
+      return date;
+    }
+    
+    // If it's a string (could be ISO string or Firestore metadata string)
+    if (typeof timestamp === 'string') {
+      // Try parsing as ISO string
+      const parsed = new Date(timestamp);
+      if (!isNaN(parsed.getTime())) {
+        console.log('✅ parseTimestamp: Parsed string to Date:', parsed);
+        return parsed;
+      }
+      console.warn('⚠️ parseTimestamp: Failed to parse string:', timestamp);
+    }
+    
+    // If it's a number (milliseconds or seconds)
+    if (typeof timestamp === 'number') {
+      // If it's in seconds (less than year 2000 in milliseconds), convert to milliseconds
+      let date;
+      if (timestamp < 946684800000) {
+        date = new Date(timestamp * 1000);
+      } else {
+        date = new Date(timestamp);
+      }
+      console.log('✅ parseTimestamp: Converted number to Date:', date);
+      return date;
+    }
+    
+    console.warn('⚠️ parseTimestamp: Unknown timestamp format:', typeof timestamp, timestamp);
+    return null; // Return null instead of current date
+  };
+
   // Reusable thumbnail image component with proxy fallback
   const ThumbnailImage = ({ src, alt, className }) => {
     const [imageSrc, setImageSrc] = React.useState(src);
@@ -133,21 +196,31 @@ const History = ({ setBackgroundSkybox }) => {
     const jobsRef = collection(db, 'unified_jobs');
     
     // Use simple query without orderBy to avoid index requirements - always sort client-side
+    // Ensure userId is properly validated before querying
+    const userId = user.uid;
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      console.error('❌ History: Invalid userId, cannot query Firestore');
+      setError('Invalid user ID. Please sign in again.');
+      setLoading(false);
+      return;
+    }
+    
     const skyboxQuery = query(
       skyboxesRef,
-      where('userId', '==', user.uid)
+      where('userId', '==', userId)
     );
     
     const jobsQuery = query(
       jobsRef,
-      where('userId', '==', user.uid)
+      where('userId', '==', userId)
     );
     
-    console.log(`🔍 History: Query created for userId: ${user.uid}`);
+    console.log(`🔍 History: Query created for userId: ${userId}`);
     console.log(`🔍 History: Query details:`, {
       collections: ['skyboxes', 'unified_jobs'],
-      filter: `userId == '${user.uid}'`,
-      hasOrderBy: false
+      filter: `userId == '${userId}'`,
+      hasOrderBy: false,
+      timestamp: new Date().toISOString()
     });
 
     let skyboxUnsubscribe;
@@ -179,27 +252,57 @@ const History = ({ setBackgroundSkybox }) => {
           try {
             const allItems = [...skyboxData, ...jobsData];
             
-            // Filter out invalid items
+            // Filter out invalid items - be more lenient to show all items
             const validItems = allItems.filter(item => {
-              if (!item || !item.id) return false;
+              if (!item || !item.id) {
+                console.warn(`⚠️ History: Skipping item - missing id or item is null`);
+                return false;
+              }
               
-              // Check for file_url (skybox image)
-              const hasFileUrl = !!item.file_url;
+              // Check for file_url (skybox image) - check multiple possible locations
+              const hasFileUrl = !!(item.file_url || 
+                                   item.imageUrl || 
+                                   item.image || 
+                                   item.skyboxUrl ||
+                                   item.preview_url ||
+                                   item.fileUrl ||
+                                   item.downloadUrl);
               
-              // Check for meshUrl (3D model URL)
-              const hasMeshUrl = !!item.jobData?.meshUrl;
+              // Check for meshUrl (3D model URL) - check multiple locations
+              const hasMeshUrl = !!(item.jobData?.meshUrl || 
+                                    item.meshUrl ||
+                                    item.meshResult?.downloadUrl);
               
               // Check for model_urls in meshResult (3D model URLs from Meshy API)
-              const hasModelUrls = !!(item.jobData?.model_urls || item.jobData?.meshResult?.model_urls);
+              const hasModelUrls = !!(item.jobData?.model_urls || 
+                                     item.jobData?.meshResult?.model_urls ||
+                                     item.model_urls ||
+                                     item.meshResult?.model_urls);
               
-              // Check for skybox URL in jobData
-              const hasSkyboxUrl = !!(item.jobData?.skyboxUrl || item.jobData?.skyboxResult?.fileUrl);
+              // Check for skybox URL in jobData or item itself
+              const hasSkyboxUrl = !!(item.jobData?.skyboxUrl || 
+                                     item.jobData?.skyboxResult?.fileUrl ||
+                                     item.jobData?.skyboxResult?.downloadUrl ||
+                                     item.skyboxUrl ||
+                                     item.skyboxResult?.fileUrl);
               
-              // Item is valid if it has at least one of these
-              const isValid = hasFileUrl || hasMeshUrl || hasModelUrls || hasSkyboxUrl;
+              // Item is valid if it has at least one of these OR if it has a title/prompt (might be pending)
+              const hasAnyUrl = hasFileUrl || hasMeshUrl || hasModelUrls || hasSkyboxUrl;
+              const hasContent = !!(item.title || item.prompt);
+              
+              // Include item if it has any URL OR if it has content (might be a pending generation)
+              const isValid = hasAnyUrl || hasContent;
               
               if (!isValid) {
-                console.warn(`⚠️ History: Item ${item.id} has no valid URLs (file_url, meshUrl, model_urls, or skyboxUrl), skipping`);
+                console.warn(`⚠️ History: Item ${item.id} has no valid URLs or content, skipping:`, {
+                  id: item.id,
+                  title: item.title,
+                  hasFileUrl,
+                  hasMeshUrl,
+                  hasModelUrls,
+                  hasSkyboxUrl,
+                  hasContent
+                });
                 return false;
               }
               
@@ -209,10 +312,10 @@ const History = ({ setBackgroundSkybox }) => {
             // Always sort by createdAt client-side (most recent first)
             validItems.sort((a, b) => {
               try {
-                const aTime = a.created_at?.toDate ? a.created_at.toDate().getTime() : 
-                             (a.created_at ? new Date(a.created_at).getTime() : 0);
-                const bTime = b.created_at?.toDate ? b.created_at.toDate().getTime() : 
-                             (b.created_at ? new Date(b.created_at).getTime() : 0);
+                const aDate = parseTimestamp(a.created_at);
+                const bDate = parseTimestamp(b.created_at);
+                const aTime = aDate.getTime();
+                const bTime = bDate.getTime();
                 return bTime - aTime; // Descending order (newest first)
               } catch (sortErr) {
                 console.warn('⚠️ History: Error sorting items, using default order:', sortErr);
@@ -221,6 +324,20 @@ const History = ({ setBackgroundSkybox }) => {
             });
 
             console.log(`✅ History: Processed ${validItems.length} items (${skyboxData.length} skyboxes, ${jobsData.length} jobs), sorted by createdAt`);
+            console.log(`📊 History: Item breakdown:`, {
+              totalItems: allItems.length,
+              validItems: validItems.length,
+              filteredOut: allItems.length - validItems.length,
+              skyboxItems: skyboxData.length,
+              jobItems: jobsData.length,
+              sampleItem: validItems.length > 0 ? {
+                id: validItems[0].id,
+                title: validItems[0].title,
+                hasFileUrl: !!validItems[0].file_url,
+                hasJobData: !!validItems[0].jobData,
+                source: validItems[0].source
+              } : null
+            });
             setHistory(validItems);
             setLoading(false);
             setError(null);
@@ -259,8 +376,8 @@ const History = ({ setBackgroundSkybox }) => {
               const data = doc.data();
               
               // Validate required fields
-              if (!data.userId || data.userId !== user.uid) {
-                console.warn(`⚠️ History: Skipping skybox ${doc.id} - userId mismatch`);
+              if (!data.userId || data.userId !== userId) {
+                console.warn(`⚠️ History: Skipping skybox ${doc.id} - userId mismatch (expected: ${userId}, got: ${data.userId})`);
                 return null;
               }
               
@@ -277,22 +394,27 @@ const History = ({ setBackgroundSkybox }) => {
               const title = data.title || data.promptUsed || data.prompt || 'Untitled Generation';
               const prompt = data.promptUsed || data.prompt || '';
               
-              // Get created_at with multiple fallbacks
+              // Get created_at with multiple fallbacks and parse properly
               let createdAt = null;
               if (data.createdAt) {
-                createdAt = data.createdAt;
+                createdAt = parseTimestamp(data.createdAt);
               } else if (data.created_at) {
-                createdAt = data.created_at;
+                createdAt = parseTimestamp(data.created_at);
               } else if (doc.metadata?.createTime) {
-                createdAt = doc.metadata.createTime;
+                createdAt = parseTimestamp(doc.metadata.createTime);
               } else {
                 // Fallback to current time if no timestamp
                 createdAt = new Date();
               }
               
+              // Include all possible URL fields for better compatibility
               const baseSkybox = {
                 id: doc.id,
                 file_url: fileUrl,
+                imageUrl: fileUrl, // Alias for compatibility
+                image: fileUrl, // Alias for compatibility
+                skyboxUrl: fileUrl, // Alias for compatibility
+                preview_url: fileUrl, // Alias for compatibility
                 title: title,
                 prompt: prompt,
                 created_at: createdAt,
@@ -317,15 +439,15 @@ const History = ({ setBackgroundSkybox }) => {
                       file_url: variationFileUrl,
                       title: variation.title || `${baseSkybox.title} (Variation ${index + 1})`,
                       prompt: variation.prompt || baseSkybox.prompt,
-                      created_at: createdAt,
-                      status: variation.status || data.status || 'completed',
-                      metadata: data.metadata || {},
-                      isVariation: true,
-                      parentId: doc.id,
-                      variationIndex: index,
-                      source: 'skyboxes'
-                    };
-                  });
+                    created_at: parseTimestamp(createdAt),
+                    status: variation.status || data.status || 'completed',
+                    metadata: data.metadata || {},
+                    isVariation: true,
+                    parentId: doc.id,
+                    variationIndex: index,
+                    source: 'skyboxes'
+                  };
+                });
               } else {
                 baseSkybox.variations = [];
               }
@@ -394,8 +516,8 @@ const History = ({ setBackgroundSkybox }) => {
               const data = doc.data();
               
               // Validate required fields
-              if (!data.userId || data.userId !== user.uid) {
-                console.warn(`⚠️ History: Skipping job ${doc.id} - userId mismatch`);
+              if (!data.userId || data.userId !== userId) {
+                console.warn(`⚠️ History: Skipping job ${doc.id} - userId mismatch (expected: ${userId}, got: ${data.userId})`);
                 return null;
               }
               
@@ -485,17 +607,42 @@ const History = ({ setBackgroundSkybox }) => {
               const title = data.prompt || data.title || 'Untitled Generation';
               const prompt = data.prompt || '';
               
-              // Get created_at with multiple fallbacks
+              // Get created_at with multiple fallbacks and parse properly
+              // PRIORITY: Firestore document metadata (actual creation time) > custom fields
               let createdAt = null;
-              if (data.createdAt) {
-                createdAt = data.createdAt;
-              } else if (data.created_at) {
-                createdAt = data.created_at;
-              } else if (doc.metadata?.createTime) {
-                createdAt = doc.metadata.createTime;
-              } else {
-                // Fallback to current time if no timestamp
-                createdAt = new Date();
+              
+              // FIRST: Try Firestore document metadata (most reliable - actual document creation time)
+              if (doc.metadata?.createTime) {
+                // Firestore metadata.createTime is a string in ISO format
+                const metadataTime = new Date(doc.metadata.createTime);
+                if (!isNaN(metadataTime.getTime())) {
+                  createdAt = metadataTime;
+                  console.log(`✅ History: Using Firestore metadata.createTime for job ${doc.id}:`, createdAt);
+                }
+              }
+              
+              // SECOND: Try custom createdAt field (if metadata not available)
+              if (!createdAt && data.createdAt) {
+                createdAt = parseTimestamp(data.createdAt);
+                if (createdAt) {
+                  console.log(`✅ History: Using data.createdAt for job ${doc.id}:`, createdAt);
+                }
+              }
+              
+              // THIRD: Try created_at field (alternative naming)
+              if (!createdAt && data.created_at) {
+                createdAt = parseTimestamp(data.created_at);
+                if (createdAt) {
+                  console.log(`✅ History: Using data.created_at for job ${doc.id}:`, createdAt);
+                }
+              }
+              
+              // LAST RESORT: Only use current time if absolutely nothing is available (shouldn't happen)
+              if (!createdAt) {
+                console.warn(`⚠️ History: No timestamp found for job ${doc.id}, using current time as fallback`);
+                console.warn(`   Document data keys:`, Object.keys(data));
+                console.warn(`   Document metadata:`, doc.metadata);
+                createdAt = new Date(); // Only fallback when nothing else works
               }
               
               // Extract model_urls from multiple possible locations
@@ -565,7 +712,7 @@ const History = ({ setBackgroundSkybox }) => {
                     file_url: skyboxVariationUrl,
                     title: `${jobItem.title} (Skybox)`,
                     prompt: jobItem.prompt,
-                    created_at: createdAt,
+                    created_at: parseTimestamp(createdAt),
                     status: data.skyboxResult?.status || data.status || 'completed',
                     isVariation: true,
                     parentId: doc.id,
@@ -578,7 +725,7 @@ const History = ({ setBackgroundSkybox }) => {
                     file_url: meshVariationUrl,
                     title: `${jobItem.title} (3D Asset)`,
                     prompt: jobItem.prompt,
-                    created_at: createdAt,
+                    created_at: parseTimestamp(createdAt),
                     status: data.meshResult?.status || data.status || 'completed',
                     isVariation: true,
                     parentId: doc.id,
@@ -668,22 +815,36 @@ const History = ({ setBackgroundSkybox }) => {
   }, [user?.uid]);
 
   const handleSkyboxClick = (item) => {
-    if (!item.file_url) {
-      console.warn("No file URL available for this skybox");
-      return;
+    // Get file URL with comprehensive fallbacks
+    const fileUrl = item.file_url || 
+                   item.jobData?.skyboxUrl || 
+                   item.jobData?.skyboxResult?.fileUrl ||
+                   item.jobData?.skyboxResult?.downloadUrl ||
+                   item.jobData?.skyboxResult?.preview_url ||
+                   null;
+    
+    if (!fileUrl) {
+      console.warn("⚠️ No file URL available for this skybox:", item.id);
+      // Still try to set it, but log a warning
     }
 
     setSelectedSkybox(item);
     setSelectedVariation(null);
+    
     const skyboxData = {
-      image: item.file_url,
-      image_jpg: item.file_url,
+      image: fileUrl || item.file_url || '',
+      image_jpg: fileUrl || item.file_url || '',
+      preview_url: fileUrl || item.file_url || '',
       title: formatTitle(item.title),
-      prompt: item.prompt,
-      metadata: item.metadata
+      prompt: item.prompt || '',
+      metadata: item.metadata || {}
     };
+    
     if (setBackgroundSkybox) {
+      console.log('✅ Setting background skybox:', skyboxData);
       setBackgroundSkybox(skyboxData);
+    } else {
+      console.warn('⚠️ setBackgroundSkybox function not available');
     }
   };
 
@@ -992,45 +1153,71 @@ const History = ({ setBackgroundSkybox }) => {
   }, [previewItem?.id, previewItem?.meshUrl, previewItem?.jobData?.model_urls, previewItem?.jobData?.meshResult?.model_urls, previewItem?.metadata?.hasMesh, previewType]);
 
   const handleVariationClick = (variation) => {
-    if (!variation.file_url) {
-      console.warn("No file URL available for this variation");
-      return;
+    // Get file URL with fallbacks
+    const fileUrl = variation.file_url || 
+                   variation.jobData?.skyboxUrl || 
+                   variation.jobData?.skyboxResult?.fileUrl ||
+                   null;
+    
+    if (!fileUrl) {
+      console.warn("⚠️ No file URL available for this variation:", variation.id);
+      // Still try to set it, but log a warning
     }
 
     setSelectedVariation(variation);
     const skyboxData = {
-      image: variation.file_url,
-      image_jpg: variation.file_url,
+      image: fileUrl || variation.file_url || '',
+      image_jpg: fileUrl || variation.file_url || '',
+      preview_url: fileUrl || variation.file_url || '',
       title: formatTitle(variation.title),
-      prompt: variation.prompt,
-      metadata: variation.metadata
+      prompt: variation.prompt || '',
+      metadata: variation.metadata || {}
     };
-    setBackgroundSkybox(skyboxData);
+    
+    if (setBackgroundSkybox) {
+      console.log('✅ Setting background skybox from variation:', skyboxData);
+      setBackgroundSkybox(skyboxData);
+    } else {
+      console.warn('⚠️ setBackgroundSkybox function not available');
+    }
   };
 
   const formatDate = (timestamp) => {
-    if (!timestamp) return 'No date';
+    if (!timestamp) {
+      console.warn('⚠️ formatDate: No timestamp provided');
+      return 'Date unavailable';
+    }
     
-    if (timestamp?.toDate) {
-      return timestamp.toDate().toLocaleDateString('en-US', {
+    try {
+      const date = parseTimestamp(timestamp);
+      
+      // If parseTimestamp returned null, timestamp couldn't be parsed
+      if (!date) {
+        console.warn('⚠️ formatDate: Failed to parse timestamp:', timestamp);
+        return 'Date unavailable';
+      }
+      
+      // Validate the date is valid
+      if (isNaN(date.getTime())) {
+        console.warn('⚠️ formatDate: Invalid date object:', date);
+        return 'Date unavailable';
+      }
+      
+      // Format the date with time
+      const formatted = date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
+        hour12: true
       });
+      
+      return formatted;
+    } catch (err) {
+      console.warn('⚠️ Error formatting date:', err, 'Timestamp:', timestamp);
+      return 'Date unavailable';
     }
-    
-    const date = new Date(timestamp);
-    return isNaN(date.getTime()) 
-      ? 'Invalid Date'
-      : date.toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
   };
 
   const formatTitle = (title) => {
@@ -1061,12 +1248,32 @@ const History = ({ setBackgroundSkybox }) => {
   });
 
   const downloadImage = (url, filename) => {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (!url || typeof url !== 'string' || url.trim() === '') {
+      console.error('❌ Invalid URL for download:', url);
+      alert('Unable to download: Invalid file URL');
+      return;
+    }
+    
+    try {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename || 'download';
+      link.target = '_blank'; // Open in new tab as fallback
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // If download doesn't work, try opening in new tab
+      setTimeout(() => {
+        // Check if download was successful (this is a best-effort check)
+        console.log('✅ Download initiated for:', filename);
+      }, 100);
+    } catch (error) {
+      console.error('❌ Error downloading file:', error);
+      // Fallback: open in new tab
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (
@@ -1155,47 +1362,79 @@ const History = ({ setBackgroundSkybox }) => {
         </div>
         
         {error && (
-          <div className="mb-8 p-4 bg-red-500/10 backdrop-blur-0 rounded-xl border border-red-500/30">
-            <p className="text-red-300 font-semibold mb-2">Error loading history:</p>
-            <p className="text-red-300 text-sm">{error}</p>
-            <button
-              onClick={() => {
-                setError(null);
-                setLoading(true);
-                // Force re-render by updating a dependency
-                window.location.reload();
-              }}
-              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm"
-            >
-              Retry
-            </button>
+          <div className="mb-8 p-6 bg-red-500/10 backdrop-blur-sm rounded-xl border border-red-500/30 shadow-lg">
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0">
+                <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <p className="text-red-300 font-semibold mb-2 text-lg">Error loading history</p>
+                <p className="text-red-300/90 text-sm mb-4 leading-relaxed">{error}</p>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      setError(null);
+                      setLoading(true);
+                      // Force re-render by updating a dependency
+                      window.location.reload();
+                    }}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Retry
+                  </button>
+                  <button
+                    onClick={() => setError(null)}
+                    className="px-4 py-2 bg-gray-700/50 hover:bg-gray-700 text-gray-300 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
         
         {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="flex flex-col items-center space-y-4">
-              <div className="w-12 h-12 border-t-2 border-b-2 border-blue-400 rounded-full animate-spin"></div>
-              <p className="text-blue-300">Loading your generations...</p>
+          <div className="flex items-center justify-center h-96">
+            <div className="flex flex-col items-center space-y-6">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-sky-500/30 border-t-sky-500 rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-8 h-8 bg-sky-500/20 rounded-full"></div>
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="text-sky-300 text-lg font-semibold mb-2">Loading your generations...</p>
+                <p className="text-gray-400 text-sm">Fetching skyboxes and assets from Firestore</p>
+              </div>
             </div>
           </div>
         ) : filteredHistory.length === 0 ? (
-          <div className="relative bg-[#141414]/60 backdrop-blur-0 rounded-xl p-12 text-center border border-[#262626] shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
-            <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.01] via-transparent to-purple-500/[0.01] pointer-events-none rounded-xl overflow-hidden" />
+          <div className="relative bg-[#141414]/60 backdrop-blur-sm rounded-xl p-12 text-center border border-[#262626] shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
+            <div className="absolute inset-0 bg-gradient-to-r from-sky-500/[0.02] via-transparent to-purple-500/[0.02] pointer-events-none rounded-xl overflow-hidden" />
             <div className="relative">
-            <div className="w-16 h-16 bg-[#141414]/60 rounded-full flex items-center justify-center mx-auto mb-4 border border-[#262626]">
-              <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <h3 className="text-xl font-semibold text-white mb-2">No generations found</h3>
-            <p className="text-gray-400 mb-6">Start creating your first In3D.Ai environment to see it here</p>
-            <button
-              onClick={() => navigate('/main')}
-              className="px-6 py-3 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white rounded-xl transition-all duration-200 font-medium"
-            >
-                              Create Your First In3D.Ai Environment
-            </button>
+              <div className="w-20 h-20 bg-gradient-to-br from-sky-500/10 to-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-[#262626] shadow-lg">
+                <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-white mb-3">No generations found</h3>
+              <p className="text-gray-400 mb-2 text-lg">Your generation history is empty</p>
+              <p className="text-gray-500 mb-8 text-sm">Start creating your first In3D.Ai environment to see it here</p>
+              <button
+                onClick={() => navigate('/main')}
+                className="px-8 py-4 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white rounded-xl transition-all duration-200 font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2 mx-auto"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                Create Your First In3D.Ai Environment
+              </button>
             </div>
           </div>
         ) : (
@@ -1240,25 +1479,55 @@ const History = ({ setBackgroundSkybox }) => {
                   >
                     {/* Image Container with Enhanced Styling */}
                     <div className={`relative overflow-hidden ${viewMode === 'grid' ? 'aspect-[16/9]' : 'w-32 h-32 flex-shrink-0 rounded-lg'}`}>
-                      {item.file_url && !is3DModelUrl(item.file_url) && !isVideoUrl(item.file_url) ? (
-                        <ThumbnailImage 
-                          src={item.file_url}
-                          alt={item.title}
-                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                        />
-                      ) : null}
-                      <div 
-                        className={`w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800/90 via-gray-700/80 to-gray-900/90 ${
-                          item.file_url ? 'hidden' : 'flex'
-                        }`}
-                      >
-                        <div className="text-center">
-                          <svg className="w-12 h-12 text-gray-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          <p className="text-xs text-gray-500">No Preview</p>
-                        </div>
-                      </div>
+                      {(() => {
+                        // Get file URL with fallbacks
+                        const fileUrl = item.file_url || 
+                                       item.jobData?.skyboxUrl || 
+                                       item.jobData?.skyboxResult?.fileUrl ||
+                                       item.jobData?.skyboxResult?.downloadUrl ||
+                                       item.jobData?.skyboxResult?.preview_url ||
+                                       null;
+                        
+                        // Check if URL is valid for image display
+                        const isValidImageUrl = fileUrl && 
+                                             !is3DModelUrl(fileUrl) && 
+                                             !isVideoUrl(fileUrl) &&
+                                             typeof fileUrl === 'string' &&
+                                             fileUrl.trim() !== '';
+                        
+                        if (isValidImageUrl) {
+                          return (
+                            <ThumbnailImage 
+                              src={fileUrl}
+                              alt={item.title || 'Preview'}
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                            />
+                          );
+                        }
+                        
+                        // Show placeholder if no valid image URL
+                        return (
+                          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800/90 via-gray-700/80 to-gray-900/90">
+                            <div className="text-center">
+                              {item.metadata?.hasMesh ? (
+                                <>
+                                  <svg className="w-12 h-12 text-emerald-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                  </svg>
+                                  <p className="text-xs text-emerald-400">3D Asset</p>
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="w-12 h-12 text-gray-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                  </svg>
+                                  <p className="text-xs text-gray-500">No Preview</p>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Enhanced Status Badge */}
                       <div className="absolute top-3 left-3 flex items-center gap-2">
@@ -1418,19 +1687,36 @@ const History = ({ setBackgroundSkybox }) => {
                             onClick={() => handleVariationClick(variation)}
                           >
                             <div className="aspect-square relative overflow-hidden">
-                              {variation.file_url ? (
-                                <img
-                                  src={variation.file_url}
-                                  alt={variation.title}
-                                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                                />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800/90 to-gray-900/90">
-                                  <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                  </svg>
-                                </div>
-                              )}
+                              {(() => {
+                                const fileUrl = variation.file_url || 
+                                               variation.jobData?.skyboxUrl || 
+                                               variation.jobData?.skyboxResult?.fileUrl ||
+                                               null;
+                                
+                                const isValidImageUrl = fileUrl && 
+                                                       !is3DModelUrl(fileUrl) && 
+                                                       !isVideoUrl(fileUrl) &&
+                                                       typeof fileUrl === 'string' &&
+                                                       fileUrl.trim() !== '';
+                                
+                                if (isValidImageUrl) {
+                                  return (
+                                    <ThumbnailImage
+                                      src={fileUrl}
+                                      alt={variation.title || 'Variation'}
+                                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                                    />
+                                  );
+                                }
+                                
+                                return (
+                                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800/90 to-gray-900/90">
+                                    <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                    </svg>
+                                  </div>
+                                );
+                              })()}
 
                               {/* Enhanced Variation Number Badge */}
                               <div className="absolute top-2 left-2 bg-gradient-to-r from-purple-600 to-purple-500 text-white text-xs font-bold px-2 py-1 rounded-lg shadow-lg backdrop-blur-sm border border-purple-400/30">
@@ -1559,15 +1845,22 @@ const History = ({ setBackgroundSkybox }) => {
                     // Helper to extract 3D model URL - ALWAYS prioritize GLB from model_urls
                     const get3DModelUrl = () => {
                       console.log('🔍 get3DModelUrl: Extracting 3D model URL...', {
+                        itemId: previewItem.id,
                         hasMeshUrl: !!previewItem.meshUrl,
                         meshUrl: previewItem.meshUrl,
+                        hasJobData: !!previewItem.jobData,
                         hasJobDataModelUrls: !!previewItem.jobData?.model_urls,
-                        hasMeshResultModelUrls: !!previewItem.jobData?.meshResult?.model_urls
+                        hasMeshResultModelUrls: !!previewItem.jobData?.meshResult?.model_urls,
+                        hasMeshResult: !!previewItem.jobData?.meshResult,
+                        meshResultKeys: previewItem.jobData?.meshResult ? Object.keys(previewItem.jobData.meshResult) : []
                       });
                       
                       // FIRST: Always check model_urls for GLB (highest priority)
+                      // Check multiple possible locations for model_urls
                       const modelUrls = previewItem.jobData?.model_urls || 
-                                      previewItem.jobData?.meshResult?.model_urls;
+                                      previewItem.jobData?.meshResult?.model_urls ||
+                                      previewItem.model_urls ||
+                                      previewItem.meshResult?.model_urls;
                       
                       if (modelUrls) {
                         console.log('🔍 Found model_urls:', {
@@ -1575,7 +1868,8 @@ const History = ({ setBackgroundSkybox }) => {
                           hasFbx: !!modelUrls.fbx,
                           hasObj: !!modelUrls.obj,
                           hasUsdz: !!modelUrls.usdz,
-                          glbUrl: modelUrls.glb
+                          glbUrl: modelUrls.glb,
+                          allUrls: modelUrls
                         });
                         
                         // Prioritize GLB, then FBX, OBJ, USDZ - skip video URLs
@@ -1595,21 +1889,35 @@ const History = ({ setBackgroundSkybox }) => {
                       }
                       
                       // SECOND: Check if meshUrl is a valid 3D model (not video)
-                      if (previewItem.meshUrl && is3DModelUrl(previewItem.meshUrl)) {
-                        console.log('✅ Using meshUrl as 3D model:', previewItem.meshUrl);
-                        return { url: previewItem.meshUrl, format: previewItem.meshFormat || 'glb' };
-                      } else if (previewItem.meshUrl && isVideoUrl(previewItem.meshUrl)) {
-                        console.warn('⚠️ meshUrl is a video, skipping:', previewItem.meshUrl);
+                      // Check multiple locations for meshUrl
+                      const meshUrl = previewItem.meshUrl || 
+                                     previewItem.jobData?.meshUrl ||
+                                     previewItem.meshResult?.downloadUrl ||
+                                     previewItem.jobData?.meshResult?.downloadUrl;
+                      
+                      if (meshUrl && is3DModelUrl(meshUrl)) {
+                        console.log('✅ Using meshUrl as 3D model:', meshUrl);
+                        return { url: meshUrl, format: previewItem.meshFormat || 'glb' };
+                      } else if (meshUrl && isVideoUrl(meshUrl)) {
+                        console.warn('⚠️ meshUrl is a video, skipping:', meshUrl);
                       }
                       
-                      // THIRD: Check downloadUrl from meshResult
-                      const downloadUrl = previewItem.jobData?.meshResult?.downloadUrl;
+                      // THIRD: Check downloadUrl from meshResult (multiple locations)
+                      const downloadUrl = previewItem.jobData?.meshResult?.downloadUrl ||
+                                         previewItem.meshResult?.downloadUrl ||
+                                         previewItem.jobData?.meshResult?.previewUrl ||
+                                         previewItem.meshResult?.previewUrl;
+                      
                       if (downloadUrl && is3DModelUrl(downloadUrl)) {
                         console.log('✅ Using downloadUrl as 3D model:', downloadUrl);
                         return { url: downloadUrl, format: 'glb' };
                       }
                       
-                      console.warn('⚠️ No valid 3D model URL found');
+                      console.warn('⚠️ No valid 3D model URL found for item:', previewItem.id, {
+                        previewItemKeys: Object.keys(previewItem),
+                        jobDataKeys: previewItem.jobData ? Object.keys(previewItem.jobData) : [],
+                        meshResultKeys: previewItem.jobData?.meshResult ? Object.keys(previewItem.jobData.meshResult) : []
+                      });
                       return null;
                     };
                     

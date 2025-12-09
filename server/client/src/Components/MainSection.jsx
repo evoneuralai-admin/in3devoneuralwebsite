@@ -135,25 +135,56 @@ const MainSection = ({ setBackgroundSkybox }) => {
           baseURL: error.config?.baseURL
         });
 
+        // Check if it's an emulator connection issue
+        const isLocalhost = typeof window !== 'undefined' && 
+                           (window.location.hostname === 'localhost' || 
+                            window.location.hostname === '127.0.0.1');
+        const isEmulatorError = error.message?.includes('emulator') || 
+                               error.message?.includes('ERR_CONNECTION_REFUSED') ||
+                               error.message?.includes('Network Error') ||
+                               (isLocalhost && error.code === 'ERR_CONNECTION_REFUSED') ||
+                               (isLocalhost && error.code === 'ERR_NETWORK') ||
+                               (error.config?.baseURL?.includes('localhost:5001') && 
+                                (error.code === 'ERR_CONNECTION_REFUSED' || error.code === 'ERR_NETWORK'));
+        
         // Only show error toast if it's a critical error (not just empty results)
         const isCriticalError = error.response?.status >= 500 || 
                                 error.message?.includes('Network error') ||
-                                error.message?.includes('not configured');
+                                error.message?.includes('not configured') ||
+                                isEmulatorError;
         
         if (isCriticalError) {
           // Existing top-right DOM toast (kept for logic compatibility)
           const errorToast = document.createElement('div');
-          errorToast.className = 'fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50';
-          errorToast.innerHTML = `
-            <div class="font-bold mb-2">⚠️ Configuration Issue</div>
-            <div class="text-sm">Unable to load 3D generation styles. Please check your API configuration.</div>
-          `;
+          errorToast.className = 'fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 max-w-md';
+          
+          let toastContent = '';
+          if (isEmulatorError) {
+            toastContent = `
+              <div class="font-bold mb-2">⚠️ Firebase Emulator Not Running</div>
+              <div class="text-sm mb-2">The Firebase Functions emulator is not running on localhost:5001</div>
+              <div class="text-xs bg-black/30 p-2 rounded mt-2">
+                <div class="font-semibold mb-1">To fix this:</div>
+                <div>1. Open a terminal</div>
+                <div>2. Run: <code class="bg-black/50 px-1 rounded">firebase emulators:start</code></div>
+                <div>3. Wait for emulators to start</div>
+                <div>4. Refresh this page</div>
+              </div>
+            `;
+          } else {
+            toastContent = `
+              <div class="font-bold mb-2">⚠️ Configuration Issue</div>
+              <div class="text-sm">Unable to load 3D generation styles. Please check your API configuration.</div>
+            `;
+          }
+          
+          errorToast.innerHTML = toastContent;
           document.body.appendChild(errorToast);
           setTimeout(() => {
             if (document.body.contains(errorToast)) {
               document.body.removeChild(errorToast);
             }
-          }, 5000);
+          }, isEmulatorError ? 10000 : 5000); // Show longer for emulator error
         }
       }
     };
@@ -566,70 +597,124 @@ const MainSection = ({ setBackgroundSkybox }) => {
       }
 
       const variationResults = await Promise.all(
-        variations.map(async (variationId) => {
-          console.log(`🔄 Starting to poll status for generation: ${variationId}`);
-          let variationStatus;
+        variations.map(async (variationId, index) => {
+          console.log(`🔄 Starting to poll status for generation: ${variationId} (${index + 1}/${variations.length})`);
+          let variationStatus = null;
           let attempts = 0;
-          const maxAttempts = 60; // 2 minutes max (60 * 2 seconds)
+          const maxAttempts = 90; // 3 minutes max (90 * 2 seconds)
+          const pollInterval = 2000; // 2 seconds
           
-          do {
+          while (attempts < maxAttempts) {
             try {
               const statusResponse = await skyboxApiService.getSkyboxStatus(variationId);
               
-              if (!statusResponse.success) {
-                throw new Error(statusResponse.error || 'Failed to get status');
+              if (!statusResponse || !statusResponse.success) {
+                throw new Error(statusResponse?.error || 'Failed to get status');
               }
               
               variationStatus = statusResponse.data;
-              console.log(`📊 Status for ${variationId} (attempt ${attempts + 1}):`, variationStatus?.status);
+              const currentStatus = variationStatus?.status;
               
-              if (variationStatus?.status === "completed" || variationStatus?.status === "complete") {
+              console.log(`📊 Status for ${variationId} (attempt ${attempts + 1}/${maxAttempts}):`, currentStatus);
+              
+              // Check for completion
+              if (currentStatus === "completed" || currentStatus === "complete") {
                 console.log(`✅ Generation ${variationId} completed!`);
                 break;
               }
               
-              if (variationStatus?.status === "failed" || variationStatus?.status === "error") {
-                throw new Error(variationStatus?.error_message || 'Generation failed');
+              // Check for failure
+              if (currentStatus === "failed" || currentStatus === "error") {
+                const errorMsg = variationStatus?.error_message || variationStatus?.error || 'Generation failed';
+                throw new Error(errorMsg);
               }
+              
+              // Update progress for this variation
+              const baseProgress = 30;
+              const progressPerVariation = 60 / variations.length;
+              const variationProgress = Math.min(95, baseProgress + (index * progressPerVariation) + (progressPerVariation * (attempts / maxAttempts)));
+              setProgress(variationProgress);
               
               attempts++;
-              if (attempts >= maxAttempts) {
-                throw new Error('Generation timed out. Please try again.');
-              }
               
-              await new Promise(resolve => setTimeout(resolve, 2000));
+              // Wait before next poll
+              await new Promise(resolve => setTimeout(resolve, pollInterval));
+              
             } catch (error) {
-              console.error(`❌ Error checking status for ${variationId}:`, error);
+              console.error(`❌ Error checking status for ${variationId} (attempt ${attempts + 1}):`, error);
+              
               // If it's a 404 or "not found" error, stop immediately
-              if (error.message?.includes('not found') || error.message?.includes('expired')) {
-                throw error;
+              if (error.message?.includes('not found') || 
+                  error.message?.includes('expired') || 
+                  error.message?.includes('Generation not found')) {
+                throw new Error(`Generation ${variationId} not found. It may have expired. Please try generating again.`);
               }
-              // For other errors, retry a few times
-              if (attempts >= 5) {
-                throw error;
+              
+              // For other errors, retry a few times before giving up
+              if (attempts >= 10) {
+                throw new Error(`Failed to get status for generation ${variationId}: ${error.message || 'Unknown error'}`);
               }
+              
               attempts++;
-              await new Promise(resolve => setTimeout(resolve, 2000));
+              await new Promise(resolve => setTimeout(resolve, pollInterval));
             }
-          } while (variationStatus?.status !== "completed" && variationStatus?.status !== "complete" && attempts < maxAttempts);
-
-          const imageUrl = variationStatus.file_url || variationStatus.image || variationStatus.thumb_url;
-          if (!imageUrl) {
-            throw new Error(`No image URL found for variation ${variationId}`);
           }
 
+          // Check if we got a valid status
+          if (!variationStatus) {
+            throw new Error(`Failed to get status for generation ${variationId} after ${maxAttempts} attempts`);
+          }
+
+          // Check if generation completed
+          const finalStatus = variationStatus.status;
+          if (finalStatus !== "completed" && finalStatus !== "complete") {
+            throw new Error(`Generation ${variationId} did not complete. Status: ${finalStatus}`);
+          }
+
+          // Extract image URL
+          const imageUrl = variationStatus.file_url || 
+                          variationStatus.image || 
+                          variationStatus.thumb_url ||
+                          variationStatus.fileUrl ||
+                          variationStatus.imageUrl;
+          
+          if (!imageUrl) {
+            console.error(`❌ No image URL found for variation ${variationId}. Status data:`, variationStatus);
+            throw new Error(`No image URL found for variation ${variationId}. The generation may not have completed properly.`);
+          }
+
+          console.log(`✅ Variation ${variationId} ready with image: ${imageUrl.substring(0, 50)}...`);
+
           return {
+            id: variationId,
+            generationId: variationId,
             image: imageUrl,
             image_jpg: imageUrl,
-            title: variationStatus.title || prompt,
-            prompt: variationStatus.prompt || prompt
+            file_url: imageUrl,
+            title: variationStatus.title || variationStatus.prompt || prompt,
+            prompt: variationStatus.prompt || prompt,
+            status: 'completed'
           };
         })
       );
 
-      setGeneratedVariations(variationResults);
-      setBackgroundSkybox(variationResults[0]);
-      setCurrentImageForDownload(variationResults[0]);
+      // Validate results before setting
+      if (!variationResults || variationResults.length === 0) {
+        throw new Error('No variations were generated. Please try again.');
+      }
+
+      // Filter out any null/undefined results
+      const validResults = variationResults.filter(v => v && v.image);
+      
+      if (validResults.length === 0) {
+        throw new Error('Generated variations are missing image URLs. Please try again.');
+      }
+
+      console.log(`✅ Successfully generated ${validResults.length} variation(s)`);
+      setGeneratedVariations(validResults);
+      setBackgroundSkybox(validResults[0]);
+      setCurrentImageForDownload(validResults[0]);
+      setCurrentVariationIndex(0);
       
       // CRITICAL: Save to Firestore skyboxes collection
       if (user?.uid) {
@@ -881,29 +966,65 @@ const MainSection = ({ setBackgroundSkybox }) => {
         setIsMinimized(true);
       }, 1000);
     } catch (error) {
-      console.error("Error generating skybox:", error);
+      console.error("❌ Error generating skybox:", error);
+      console.error("Error details:", {
+        name: error?.name,
+        message: error?.message,
+        stack: error?.stack,
+        response: error?.response?.data
+      });
       
       let errorMessage = "Failed to generate In3D.Ai environment";
       
+      // Handle different error types
       if (error.response && error.response.data) {
-        const { error: apiError, code } = error.response.data;
+        const { error: apiError, code, message } = error.response.data;
         
         if (code === 'QUOTA_EXCEEDED') {
-          errorMessage = apiError || "API quota has been exhausted. Please contact support or try again later.";
+          errorMessage = apiError || message || "API quota has been exhausted. Please contact support or try again later.";
         } else if (code === 'INVALID_REQUEST') {
-          errorMessage = apiError || "Invalid request parameters. Please check your input.";
+          errorMessage = apiError || message || "Invalid request parameters. Please check your input.";
         } else if (code === 'AUTH_ERROR') {
           errorMessage = "Authentication error. Please refresh the page and try again.";
+        } else if (code === 'API_KEY_NOT_CONFIGURED') {
+          errorMessage = "BlockadeLabs API key is not configured. Please contact support.";
         } else if (apiError) {
           errorMessage = apiError;
+        } else if (message) {
+          errorMessage = message;
         }
       } else if (error.message) {
-        errorMessage += ": " + error.message;
+        // Provide more helpful error messages
+        if (error.message.includes('not found') || error.message.includes('expired')) {
+          errorMessage = "The generation request was not found or has expired. Please try generating again.";
+        } else if (error.message.includes('timeout') || error.message.includes('timed out')) {
+          errorMessage = "Generation timed out. The server may be busy. Please try again.";
+        } else if (error.message.includes('network') || error.message.includes('Network')) {
+          errorMessage = "Network error. Please check your internet connection and try again.";
+        } else {
+          errorMessage = error.message;
+        }
       }
       
       setError(errorMessage);
       setIsGenerating(false);
       setProgress(0);
+      setGeneratedVariations([]);
+      setCurrentVariationIndex(0);
+      
+      // Show error notification
+      const errorToast = document.createElement('div');
+      errorToast.className = 'fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 max-w-md';
+      errorToast.innerHTML = `
+        <div class="font-bold mb-2">❌ Generation Failed</div>
+        <div class="text-sm">${errorMessage}</div>
+      `;
+      document.body.appendChild(errorToast);
+      setTimeout(() => {
+        if (document.body.contains(errorToast)) {
+          document.body.removeChild(errorToast);
+        }
+      }, 8000);
     }
 
     return () => {

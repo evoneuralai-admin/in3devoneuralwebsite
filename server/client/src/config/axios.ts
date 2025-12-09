@@ -2,8 +2,17 @@ import axios from 'axios';
 import { auth } from './firebase';
 import { getApiBaseUrl } from '../utils/apiConfig';
 
+const apiBaseUrl = getApiBaseUrl();
+console.log('🌐 API Configuration:', {
+  baseURL: apiBaseUrl,
+  isLocalhost: typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'),
+  env: import.meta.env.MODE,
+  dev: import.meta.env.DEV,
+  useEmulator: import.meta.env.VITE_USE_FUNCTIONS_EMULATOR
+});
+
 const api = axios.create({
-  baseURL: getApiBaseUrl(),
+  baseURL: apiBaseUrl,
   withCredentials: false,
   timeout: 30000, // 30 second timeout for API calls
 });

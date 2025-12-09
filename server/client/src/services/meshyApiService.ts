@@ -125,9 +125,21 @@ const getApiBaseUrl = () => {
   return `https://${region}-${projectId}.cloudfunctions.net/api`;
 };
 
+// Check if we should use Firebase Functions proxy (recommended for production)
+const shouldUseProxy = () => {
+  // Use proxy in production or if explicitly configured
+  if (import.meta.env.PROD || import.meta.env.VITE_USE_MESHY_PROXY === 'true') {
+    return true;
+  }
+  // In development, use direct API if API key is available, otherwise use proxy
+  return !import.meta.env.VITE_MESHY_API_KEY;
+};
+
 export class MeshyApiService {
   private apiKey: string;
   private baseUrl: string;
+  private proxyBaseUrl: string;
+  private useProxy: boolean;
   private maxRetries: number = 3;
   private retryDelay: number = 1000;
   private timeout: number = 30000;
@@ -135,18 +147,28 @@ export class MeshyApiService {
   constructor() {
     this.apiKey = import.meta.env.VITE_MESHY_API_KEY || '';
     this.baseUrl = import.meta.env.VITE_MESHY_API_BASE_URL || 'https://api.meshy.ai/openapi/v2';
+    this.proxyBaseUrl = getApiBaseUrl();
+    this.useProxy = shouldUseProxy();
     
-    if (!this.apiKey) {
-      console.warn('Meshy API key not configured. Set VITE_MESHY_API_KEY environment variable.');
+    if (!this.apiKey && !this.useProxy) {
+      console.warn('Meshy API key not configured. Will use Firebase Functions proxy.');
+      this.useProxy = true;
     }
+    
+    console.log('🔧 Meshy API Service initialized:', {
+      useProxy: this.useProxy,
+      hasApiKey: !!this.apiKey,
+      baseUrl: this.useProxy ? this.proxyBaseUrl : this.baseUrl
+    });
   }
   
   /**
    * Check if the service is properly configured
    */
   isConfigured(): boolean {
-    const configured = !!this.apiKey && this.apiKey.length > 0;
-    console.log(`🔧 Meshy service configured: ${configured}`);
+    // Service is configured if we have API key OR we're using proxy (which has backend API key)
+    const configured = (!!this.apiKey && this.apiKey.length > 0) || this.useProxy;
+    console.log(`🔧 Meshy service configured: ${configured} (useProxy: ${this.useProxy}, hasApiKey: ${!!this.apiKey})`);
     return configured;
   }
 
@@ -158,17 +180,39 @@ export class MeshyApiService {
     options: RequestInit = {}, 
     retryCount: number = 0
   ): Promise<Response> {
-    const url = `${this.baseUrl}${endpoint}`;
+    // Use proxy URL if configured, otherwise use direct Meshy API
+    const baseUrl = this.useProxy ? this.proxyBaseUrl : this.baseUrl;
+    
+    // Map endpoint for proxy
+    let proxyEndpoint = endpoint;
+    if (this.useProxy) {
+      if (endpoint === '/text-to-3d' && options.method === 'POST') {
+        proxyEndpoint = '/meshy/generate';
+      } else if (endpoint.startsWith('/text-to-3d/')) {
+        const taskId = endpoint.replace('/text-to-3d/', '');
+        proxyEndpoint = `/meshy/status/${taskId}`;
+      }
+    }
+    
+    const url = `${baseUrl}${proxyEndpoint}`;
     
     // Create AbortController for timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     
+    const defaultHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'In3D.ai-WebApp/1.0',
+    };
+    
+    // Only add Authorization header if using direct API (not proxy)
+    if (!this.useProxy && this.apiKey) {
+      defaultHeaders['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    
     const defaultOptions: RequestInit = {
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'In3D.ai-WebApp/1.0',
+        ...defaultHeaders,
         ...options.headers,
       },
       signal: controller.signal, // Use AbortSignal for timeout
@@ -269,19 +313,28 @@ export class MeshyApiService {
           statusText: response.statusText,
           errorData: errorData
         });
-        throw new Error(`Meshy API error: ${response.status} ${response.statusText} - ${errorData.error?.message || errorData.message || 'Unknown error'}`);
+        
+        // Handle proxy error response structure
+        const errorMessage = this.useProxy 
+          ? (errorData.error || errorData.message || 'Unknown error')
+          : (errorData.error?.message || errorData.message || 'Unknown error');
+        
+        throw new Error(`Meshy API error: ${response.status} ${response.statusText} - ${errorMessage}`);
       }
 
       const data = await response.json();
       console.log('📥 Meshy API response:', data);
       
-      if (!data.result) {
-        console.error('❌ No task ID in response:', data);
+      // Handle proxy response structure
+      const responseData = this.useProxy && data.data ? data.data : data;
+      
+      if (!responseData.result) {
+        console.error('❌ No task ID in response:', responseData);
         throw new Error('Invalid response from Meshy API: No task ID received');
       }
       
-      console.log('✅ Meshy generation initiated:', data.result);
-      return data;
+      console.log('✅ Meshy generation initiated:', responseData.result);
+      return responseData;
     } catch (error) {
       console.error('❌ Error generating 3D asset with Meshy:', error);
       throw error;
@@ -311,12 +364,22 @@ export class MeshyApiService {
           statusText: response.statusText,
           errorData: errorData
         });
-        throw new Error(`Meshy API error: ${response.status} ${response.statusText} - ${errorData.error?.message || errorData.message || 'Unknown error'}`);
+        
+        // Handle proxy error response structure
+        const errorMessage = this.useProxy 
+          ? (errorData.error || errorData.message || 'Unknown error')
+          : (errorData.error?.message || errorData.message || 'Unknown error');
+        
+        throw new Error(`Meshy API error: ${response.status} ${response.statusText} - ${errorMessage}`);
       }
       
       const data = await response.json();
-      console.log('📊 Task status:', data.status, 'Progress:', data.progress + '%');
-      return data;
+      
+      // Handle proxy response structure
+      const responseData = this.useProxy && data.data ? data.data : data;
+      
+      console.log('📊 Task status:', responseData.status, 'Progress:', responseData.progress + '%');
+      return responseData;
     } catch (error) {
       console.error('❌ Error getting generation status from Meshy:', error);
       throw error;

@@ -3,6 +3,21 @@
  * Handles skybox generation, status checking, and user management
  */
 
+// Load environment variables from .env file in local development
+// This only runs in local development (not in production)
+if (process.env.FUNCTIONS_EMULATOR === 'true' || process.env.NODE_ENV === 'development') {
+  try {
+    // Try to load dotenv if available (for local development)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const dotenv = require('dotenv');
+    dotenv.config();
+    console.log('✅ Loaded .env file for local development');
+  } catch (error) {
+    // dotenv not installed or .env file not found - that's okay
+    console.log('ℹ️ dotenv not available, using environment variables');
+  }
+}
+
 import {setGlobalOptions} from "firebase-functions/v2";
 import {onRequest} from "firebase-functions/v2/https";
 import * as admin from 'firebase-admin';
@@ -59,7 +74,10 @@ const PUBLIC_ENDPOINTS = [
   { method: 'POST', path: '/subscription/cancel' },
   { method: 'POST', path: '/razorpay/webhook' },
   { method: 'GET', path: '/proxy-asset' },
-  { method: 'HEAD', path: '/proxy-asset' }
+  { method: 'HEAD', path: '/proxy-asset' },
+  { method: 'POST', path: '/meshy/generate' },
+  { method: 'GET', path: '/meshy/status' },
+  { method: 'GET', path: '/meshy/task' }
 ];
 
 const isPublicEndpoint = (req: Request) => {
@@ -109,6 +127,7 @@ app.use(authenticateUser);
 
 // Initialize services
 let BLOCKADE_API_KEY = '';
+let MESHY_API_KEY = '';
 let razorpay: Razorpay | null = null;
 
 try {
@@ -122,6 +141,17 @@ try {
   }
 } catch (error) {
   console.error('Failed to configure BlockadeLabs API key:', error);
+}
+
+try {
+  MESHY_API_KEY = process.env.MESHY_API_KEY || '';
+  if (MESHY_API_KEY) {
+    console.log('✅ Meshy API key configured successfully');
+  } else {
+    console.warn('⚠️ MESHY_API_KEY not found in environment variables (optional)');
+  }
+} catch (error) {
+  console.error('❌ Failed to configure Meshy API key:', error);
 }
 
 try {
@@ -151,9 +181,11 @@ app.get('/env-check', (req: Request, res: Response) => {
       environment: 'production',
       firebase: true,
       blockadelabs: !!BLOCKADE_API_KEY,
+      meshy: !!MESHY_API_KEY,
       razorpay: !!razorpay,
       env_debug: {
         blockadelabs_key_length: process.env.BLOCKADE_API_KEY?.length || 0,
+        meshy_key_length: process.env.MESHY_API_KEY?.length || 0,
         razorpay_key_length: process.env.RAZORPAY_KEY_ID?.length || 0,
         razorpay_secret_length: process.env.RAZORPAY_KEY_SECRET?.length || 0
       },
@@ -182,73 +214,130 @@ app.get('/health', (req: Request, res: Response) => {
 app.get('/skybox/styles', async (req: Request, res: Response) => {
   const requestId = (req as any).requestId;
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 20;
+  const limit = parseInt(req.query.limit as string) || 100;
   
   try {
     console.log(`[${requestId}] Fetching skybox styles, page: ${page}, limit: ${limit}`);
+    console.log(`[${requestId}] BLOCKADE_API_KEY configured: ${!!BLOCKADE_API_KEY}, length: ${BLOCKADE_API_KEY?.length || 0}`);
     
+    // Try BlockadeLabs API first if API key is available
     if (BLOCKADE_API_KEY) {
       try {
+        console.log(`[${requestId}] Attempting to fetch from BlockadeLabs API...`);
         const response = await axios.get('https://backend.blockadelabs.com/api/v1/skybox/styles', {
           headers: {
             'x-api-key': BLOCKADE_API_KEY,
             'Content-Type': 'application/json'
           },
-          params: { page, limit }
+          params: { page, limit },
+          timeout: 10000
         });
         
-        console.log(`[${requestId}] Successfully fetched ${response.data.length} styles from BlockadeLabs`);
-        
-        return res.json({
-          success: true,
-          data: response.data,
-          pagination: {
-            page,
-            limit,
-            total: response.data.length
-          },
-          requestId
+        // Handle different response formats from BlockadeLabs
+        let stylesData = response.data;
+        if (Array.isArray(stylesData)) {
+          // Response is directly an array
+          console.log(`[${requestId}] Successfully fetched ${stylesData.length} styles from BlockadeLabs (array format)`);
+          
+          return res.json({
+            success: true,
+            data: stylesData,
+            styles: stylesData, // Also provide as 'styles' for compatibility
+            pagination: {
+              page,
+              limit,
+              total: stylesData.length
+            },
+            requestId
+          });
+        } else if (stylesData?.data && Array.isArray(stylesData.data)) {
+          // Response has data property
+          console.log(`[${requestId}] Successfully fetched ${stylesData.data.length} styles from BlockadeLabs (nested format)`);
+          
+          return res.json({
+            success: true,
+            data: stylesData.data,
+            styles: stylesData.data, // Also provide as 'styles' for compatibility
+            pagination: {
+              page,
+              limit,
+              total: stylesData.data.length,
+              ...(stylesData.pagination || {})
+            },
+            requestId
+          });
+        } else {
+          console.warn(`[${requestId}] Unexpected response format from BlockadeLabs:`, typeof stylesData);
+          // Fall through to Firebase fallback
+        }
+      } catch (error: any) {
+        console.error(`[${requestId}] BlockadeLabs API error:`, {
+          message: error.message,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data
         });
-      } catch (error) {
-        console.error(`[${requestId}] BlockadeLabs API error:`, error);
-        // Fallback to Firebase data
+        // Fall through to Firebase fallback
       }
+    } else {
+      console.warn(`[${requestId}] BLOCKADE_API_KEY not configured, using Firebase fallback`);
     }
     
     // Fallback: Get styles from Firebase
-    const db = admin.firestore();
-    const stylesRef = db.collection('skyboxStyles');
-    const snapshot = await stylesRef
-      .orderBy('createdAt', 'desc')
-      .limit(limit)
-      .offset((page - 1) * limit)
-      .get();
-    
-    const styles = snapshot.docs.map((doc: any) => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-    
-    console.log(`[${requestId}] Successfully fetched ${styles.length} styles from Firebase`);
-    
-    return res.json({
-      success: true,
-      data: styles,
-      pagination: {
-        page,
-        limit,
-        total: styles.length
-      },
-      requestId
-    });
-      } catch (error) {
-      console.error(`[${requestId}] Error fetching skybox styles:`, error);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to fetch skybox styles',
+    try {
+      const db = admin.firestore();
+      const stylesRef = db.collection('skyboxStyles');
+      
+      // Firestore doesn't support offset, use startAfter for pagination
+      // For now, just get all styles (or limit to reasonable number)
+      const snapshot = await stylesRef
+        .orderBy('createdAt', 'desc')
+        .limit(limit)
+        .get();
+      
+      const styles = snapshot.docs.map((doc: any) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      console.log(`[${requestId}] Successfully fetched ${styles.length} styles from Firebase fallback`);
+      
+      return res.json({
+        success: true,
+        data: styles,
+        styles: styles, // Also provide as 'styles' for compatibility
+        pagination: {
+          page,
+          limit,
+          total: styles.length
+        },
         requestId
       });
+    } catch (firestoreError: any) {
+      console.error(`[${requestId}] Firebase fallback error:`, firestoreError);
+      // If Firebase also fails, return empty array with success
+      return res.json({
+        success: true,
+        data: [],
+        styles: [],
+        pagination: {
+          page,
+          limit,
+          total: 0
+        },
+        requestId,
+        warning: 'Both BlockadeLabs API and Firebase fallback failed. Returning empty styles array.'
+      });
     }
+  } catch (error: any) {
+    console.error(`[${requestId}] Unexpected error fetching skybox styles:`, error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch skybox styles',
+      message: error.message || 'Unknown error',
+      requestId
+    });
+  }
 });
 
 // Skybox Generation API
@@ -1499,6 +1588,262 @@ app.get('/proxy-asset', async (req: Request, res: Response) => {
   }
 });
 
+// Meshy AI API Proxy Endpoints
+// POST /meshy/generate - Generate a 3D asset
+app.post('/meshy/generate', async (req: Request, res: Response) => {
+  const requestId = (req as any).requestId;
+  const { prompt, negative_prompt, art_style, seed, ai_model, topology, target_polycount, should_remesh, symmetry_mode, moderation } = req.body;
+  
+  try {
+    console.log(`[${requestId}] Meshy generation requested:`, { prompt, art_style, ai_model });
+    
+    if (!MESHY_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: 'Meshy API not configured',
+        requestId
+      });
+    }
+    
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: prompt',
+        requestId
+      });
+    }
+    
+    // Create generation using Meshy API
+    const payload = {
+      mode: 'preview',
+      prompt: prompt.trim(),
+      art_style: art_style || 'realistic',
+      seed: seed || Math.floor(Math.random() * 1000000),
+      ai_model: ai_model || 'meshy-4',
+      topology: topology || 'triangle',
+      target_polycount: target_polycount || 30000,
+      should_remesh: should_remesh !== false,
+      symmetry_mode: symmetry_mode || 'auto',
+      moderation: moderation || false,
+    };
+    
+    if (negative_prompt) {
+      (payload as any).negative_prompt = negative_prompt.trim();
+    }
+    
+    const response = await axios.post('https://api.meshy.ai/openapi/v2/text-to-3d', payload, {
+      headers: {
+        'Authorization': `Bearer ${MESHY_API_KEY}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'In3D.ai-WebApp/1.0'
+      },
+      timeout: 30000
+    });
+    
+    const generation = response.data;
+    console.log(`[${requestId}] Meshy generation created:`, generation.result);
+    
+    if (!generation.result) {
+      console.error(`[${requestId}] No task ID returned from Meshy API`);
+      return res.status(500).json({
+        success: false,
+        error: 'No task ID returned from API',
+        requestId
+      });
+    }
+    
+    return res.json({
+      success: true,
+      data: generation,
+      requestId
+    });
+  } catch (error: any) {
+    console.error(`[${requestId}] Error generating Meshy asset:`, error);
+    
+    if (error.response) {
+      const { status, data } = error.response;
+      
+      if (status === 401 || status === 403) {
+        return res.status(status).json({
+          success: false,
+          error: 'Invalid Meshy API key or authentication failed',
+          code: 'AUTH_ERROR',
+          requestId
+        });
+      }
+      
+      if (status === 400) {
+        return res.status(400).json({
+          success: false,
+          error: data?.error?.message || data?.message || 'Invalid request parameters',
+          code: 'INVALID_REQUEST',
+          requestId
+        });
+      }
+      
+      if (status === 429) {
+        return res.status(429).json({
+          success: false,
+          error: 'Rate limit exceeded. Please try again later.',
+          code: 'RATE_LIMIT',
+          requestId
+        });
+      }
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to generate 3D asset',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
+});
+
+// GET /meshy/status/:taskId - Get generation status
+app.get('/meshy/status/:taskId', async (req: Request, res: Response) => {
+  const requestId = (req as any).requestId;
+  const { taskId } = req.params;
+  
+  try {
+    console.log(`[${requestId}] Checking Meshy status for task: ${taskId}`);
+    
+    if (!MESHY_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: 'Meshy API not configured',
+        requestId
+      });
+    }
+    
+    if (!taskId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing task ID',
+        requestId
+      });
+    }
+    
+    // Get generation status from Meshy API
+    const response = await axios.get(`https://api.meshy.ai/openapi/v2/text-to-3d/${taskId}`, {
+      headers: {
+        'Authorization': `Bearer ${MESHY_API_KEY}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'In3D.ai-WebApp/1.0'
+      },
+      timeout: 30000
+    });
+    
+    const taskStatus = response.data;
+    console.log(`[${requestId}] Meshy task status:`, taskStatus.status);
+    
+    return res.json({
+      success: true,
+      data: taskStatus,
+      requestId
+    });
+  } catch (error: any) {
+    console.error(`[${requestId}] Error checking Meshy status:`, error);
+    
+    if (error.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'Task not found',
+        code: 'TASK_NOT_FOUND',
+        requestId
+      });
+    }
+    
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      return res.status(error.response.status).json({
+        success: false,
+        error: 'Invalid Meshy API key or authentication failed',
+        code: 'AUTH_ERROR',
+        requestId
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get task status',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
+});
+
+// GET /meshy/task/:taskId - Alias for status endpoint
+app.get('/meshy/task/:taskId', async (req: Request, res: Response) => {
+  const requestId = (req as any).requestId;
+  const { taskId } = req.params;
+  
+  // Use the same logic as status endpoint
+  try {
+    console.log(`[${requestId}] Checking Meshy task: ${taskId}`);
+    
+    if (!MESHY_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: 'Meshy API not configured',
+        requestId
+      });
+    }
+    
+    if (!taskId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing task ID',
+        requestId
+      });
+    }
+    
+    const response = await axios.get(`https://api.meshy.ai/openapi/v2/text-to-3d/${taskId}`, {
+      headers: {
+        'Authorization': `Bearer ${MESHY_API_KEY}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'In3D.ai-WebApp/1.0'
+      },
+      timeout: 30000
+    });
+    
+    const taskStatus = response.data;
+    console.log(`[${requestId}] Meshy task status:`, taskStatus.status);
+    
+    return res.json({
+      success: true,
+      data: taskStatus,
+      requestId
+    });
+  } catch (error: any) {
+    console.error(`[${requestId}] Error checking Meshy task:`, error);
+    
+    if (error.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'Task not found',
+        code: 'TASK_NOT_FOUND',
+        requestId
+      });
+    }
+    
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      return res.status(error.response.status).json({
+        success: false,
+        error: 'Invalid Meshy API key or authentication failed',
+        code: 'AUTH_ERROR',
+        requestId
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get task status',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
+});
+
 // Error handling middleware
 app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   const requestId = (req as any).requestId;
@@ -1519,5 +1864,5 @@ export const api = onRequest({
   cors: true,
   region: 'us-central1',
   invoker: 'public',
-  secrets: ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'BLOCKADE_API_KEY']
+  secrets: ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'BLOCKADE_API_KEY', 'MESHY_API_KEY']
 }, app);
