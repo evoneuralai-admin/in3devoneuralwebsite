@@ -48,7 +48,7 @@ app.get("/health", (req: Request, res: Response) => {
 export const api = onRequest({
   cors: true,
   maxInstances: 10,
-  region: 'us-central1',
+  region: 'asia-south1', // Match database location
   memory: '256MiB',
   timeoutSeconds: 60,
 }, app);

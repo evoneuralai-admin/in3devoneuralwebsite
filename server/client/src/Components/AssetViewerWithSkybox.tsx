@@ -199,16 +199,24 @@ function AssetModel({
         const apiBaseUrl = getApiBaseUrl();
         const proxyUrl = `${apiBaseUrl}/proxy-asset?url=${encodeURIComponent(assetUrl)}`;
         
+        // Always prepare production proxy as fallback (use asia-south1 region matching database location)
+        const isLocalhost = apiBaseUrl.includes('localhost');
+        const productionProxyUrl = `https://asia-south1-in3devoneuralai.cloudfunctions.net/api/proxy-asset?url=${encodeURIComponent(assetUrl)}`;
+        
         console.log('🔄 Loading 3D model:', {
           originalUrl: assetUrl,
           proxyUrl: proxyUrl,
-          apiBaseUrl: apiBaseUrl
+          productionProxyUrl: productionProxyUrl,
+          apiBaseUrl: apiBaseUrl,
+          isLocalhost: isLocalhost
         });
         
         const strategies = [
-          // Strategy 1: Proxy first (will work due to CORS bypass)
+          // Strategy 1: Local/current proxy first (if available)
           () => proxyUrl,
-          // Strategy 2: Direct URL (will likely fail due to CORS, but try anyway)
+          // Strategy 2: Production proxy (always try as fallback)
+          () => productionProxyUrl,
+          // Strategy 3: Direct URL (will likely fail due to CORS, but try anyway)
           () => assetUrl
         ];
 
@@ -220,10 +228,18 @@ function AssetModel({
             const url = strategy();
             console.log('🔄 Trying to load 3D model from:', url);
             
+            // Use appropriate timeout for proxy (15 seconds) vs direct URL (30 seconds)
+            // Production proxy may take longer due to cold starts
+            const isProxy = url.includes('/proxy-asset');
+            const isProductionProxy = url.includes('cloudfunctions.net');
+            const timeoutDuration = isProxy 
+              ? (isProductionProxy ? 30000 : 10000) // 30s for production, 10s for localhost
+              : 30000; // 30s for direct URL
+            
             loadedGltf = await new Promise<any>((resolve, reject) => {
               const timeout = setTimeout(() => {
-                reject(new Error('3D model loading timeout after 30 seconds'));
-              }, 30000);
+                reject(new Error(`3D model loading timeout after ${timeoutDuration / 1000} seconds`));
+              }, timeoutDuration);
               
               loaderRef.current!.gltfLoader.load(
                 url,
@@ -241,6 +257,17 @@ function AssetModel({
                 (error) => {
                   clearTimeout(timeout);
                   console.error('❌ GLTFLoader error:', error);
+                  
+                  // Check if it's a connection error (proxy not available)
+                  const errorMessage = (error instanceof Error ? error.message : String(error)) || '';
+                  const isConnectionError = errorMessage.includes('Failed to fetch') || 
+                                           errorMessage.includes('ERR_CONNECTION_REFUSED') ||
+                                           errorMessage.includes('NetworkError');
+                  
+                  if (isConnectionError && isProxy) {
+                    console.warn('⚠️ Proxy unavailable, will try next strategy');
+                  }
+                  
                   reject(error);
                 }
               );
@@ -252,7 +279,14 @@ function AssetModel({
             }
           } catch (err) {
             lastError = err;
-            console.warn('⚠️ Load strategy failed:', err);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // If it's a connection error with proxy, log and continue
+            if (errorMessage.includes('Failed to fetch') || errorMessage.includes('ERR_CONNECTION_REFUSED')) {
+              console.warn('⚠️ Connection failed, trying next strategy:', errorMessage);
+            } else {
+              console.warn('⚠️ Load strategy failed:', err);
+            }
             // Continue to next strategy
           }
         }

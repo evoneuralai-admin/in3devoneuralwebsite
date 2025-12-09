@@ -10,7 +10,7 @@ import { getApiBaseUrl } from '../utils/apiConfig';
 const getApiUrl = () => {
   const apiBaseUrl = getApiBaseUrl();
   // Remove /api suffix if present, as this file might need the base URL
-  return apiBaseUrl.replace(/\/api$/, '') || 'http://localhost:5001/in3devoneuralai/us-central1';
+  return apiBaseUrl.replace(/\/api$/, '') || 'http://localhost:5001/in3devoneuralai/asia-south1';
 };
 
 // Default skybox data for when no image is available

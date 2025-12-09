@@ -9,11 +9,11 @@ const getApiBaseUrl = () => {
   
   // Use local backend in development
   if (import.meta.env.DEV) {
-    return 'http://localhost:5001/in3devoneuralai/us-central1/api';
+    return 'http://localhost:5001/in3devoneuralai/asia-south1/api';
   }
   
-  // Use Firebase Functions in production
-  const region = 'us-central1';
+  // Use Firebase Functions in production (asia-south1 to match database location)
+  const region = 'asia-south1';
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || 'in3devoneuralai';
   return `https://${region}-${projectId}.cloudfunctions.net/api`;
 };

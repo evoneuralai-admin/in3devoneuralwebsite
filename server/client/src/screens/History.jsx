@@ -1,4 +1,4 @@
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, orderBy, query, where, doc, getDoc } from 'firebase/firestore';
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useState, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
@@ -39,6 +39,16 @@ const History = ({ setBackgroundSkybox }) => {
     if (!timestamp) {
       console.warn('⚠️ parseTimestamp: No timestamp provided');
       return null; // Return null instead of current date
+    }
+    
+    // If it's already a Date object, return it directly
+    if (timestamp instanceof Date) {
+      // Validate the date is valid
+      if (!isNaN(timestamp.getTime())) {
+        return timestamp;
+      }
+      console.warn('⚠️ parseTimestamp: Invalid Date object:', timestamp);
+      return null;
     }
     
     // If it's a Firestore Timestamp object, convert it
@@ -381,14 +391,25 @@ const History = ({ setBackgroundSkybox }) => {
                 return null;
               }
               
-              // Get file URL with multiple fallbacks
+              // Get file URL with multiple fallbacks - check ALL possible locations
               const fileUrl = data.imageUrl || 
                             data.image || 
                             data.file_url || 
                             data.skyboxUrl || 
                             data.preview_url ||
                             data.fileUrl ||
-                            data.downloadUrl;
+                            data.downloadUrl ||
+                            data.result?.fileUrl ||
+                            data.result?.downloadUrl ||
+                            data.result?.imageUrl ||
+                            data.skyboxResult?.fileUrl ||
+                            data.skyboxResult?.downloadUrl ||
+                            data.skyboxResult?.imageUrl;
+              
+              // Check for mesh results in skybox document (some skyboxes might have associated mesh data)
+              const meshResult = data.meshResult || data.mesh || null;
+              const meshUrl = data.meshUrl || meshResult?.downloadUrl || meshResult?.previewUrl || null;
+              const extractedModelUrls = data.model_urls || meshResult?.model_urls || null;
               
               // Validate we have at least a title or prompt
               const title = data.title || data.promptUsed || data.prompt || 'Untitled Generation';
@@ -407,6 +428,13 @@ const History = ({ setBackgroundSkybox }) => {
                 createdAt = new Date();
               }
               
+              // Determine status: If file URL exists, treat as completed regardless of status field
+              let status = data.status || 'completed';
+              if (fileUrl && (status === 'pending' || status === 'processing')) {
+                console.log(`✅ History: Skybox ${doc.id} has file URL, marking as completed (was: ${status})`);
+                status = 'completed';
+              }
+              
               // Include all possible URL fields for better compatibility
               const baseSkybox = {
                 id: doc.id,
@@ -418,10 +446,23 @@ const History = ({ setBackgroundSkybox }) => {
                 title: title,
                 prompt: prompt,
                 created_at: createdAt,
-                status: data.status || 'completed',
-                metadata: data.metadata || {},
+                status: status,
+                metadata: {
+                  ...(data.metadata || {}),
+                  hasSkybox: !!fileUrl,
+                  hasMesh: !!(meshUrl || extractedModelUrls),
+                  jobId: doc.id
+                },
                 isVariation: false,
-                source: 'skyboxes'
+                source: 'skyboxes',
+                // Add jobData structure to match unified_jobs format for consistency
+                jobData: {
+                  skyboxUrl: fileUrl,
+                  meshUrl: meshUrl,
+                  skyboxResult: data.skyboxResult || data.result || null,
+                  meshResult: meshResult || null,
+                  model_urls: extractedModelUrls
+                }
               };
 
               // If there are variations, include them in the same object
@@ -433,23 +474,59 @@ const History = ({ setBackgroundSkybox }) => {
                                            variation.image_jpg || 
                                            variation.file_url || 
                                            variation.preview_url ||
-                                           variation.fileUrl;
+                                           variation.fileUrl ||
+                                           variation.result?.fileUrl ||
+                                           variation.result?.downloadUrl;
+                    // Determine status for variation
+                    let variationStatus = variation.status || data.status || 'completed';
+                    if (variationFileUrl && (variationStatus === 'pending' || variationStatus === 'processing')) {
+                      variationStatus = 'completed';
+                    }
                     return {
                       id: `${doc.id}_variation_${index}`,
                       file_url: variationFileUrl,
                       title: variation.title || `${baseSkybox.title} (Variation ${index + 1})`,
                       prompt: variation.prompt || baseSkybox.prompt,
-                    created_at: parseTimestamp(createdAt),
-                    status: variation.status || data.status || 'completed',
-                    metadata: data.metadata || {},
-                    isVariation: true,
-                    parentId: doc.id,
-                    variationIndex: index,
-                    source: 'skyboxes'
-                  };
-                });
+                      created_at: createdAt, // Use parent createdAt, already a Date object
+                      status: variationStatus,
+                      metadata: {
+                        ...(data.metadata || {}),
+                        hasSkybox: !!variationFileUrl,
+                        jobId: doc.id
+                      },
+                      isVariation: true,
+                      parentId: doc.id,
+                      variationIndex: index,
+                      source: 'skyboxes',
+                      // Include jobData for variations too
+                      jobData: {
+                        skyboxUrl: variationFileUrl,
+                        meshUrl: null,
+                        skyboxResult: variation.result || null,
+                        meshResult: null,
+                        model_urls: null
+                      }
+                    };
+                  });
               } else {
                 baseSkybox.variations = [];
+              }
+              
+              // Debug logging for skybox items without file URLs
+              if (!fileUrl && !meshUrl && !extractedModelUrls) {
+                console.log(`🔍 History: Skybox ${doc.id} has no URLs found. Document fields:`, {
+                  id: doc.id,
+                  title: title,
+                  status: data.status,
+                  hasImageUrl: !!data.imageUrl,
+                  hasImage: !!data.image,
+                  hasFileUrl: !!data.file_url,
+                  hasSkyboxUrl: !!data.skyboxUrl,
+                  hasResult: !!data.result,
+                  hasSkyboxResult: !!data.skyboxResult,
+                  hasMeshResult: !!data.meshResult,
+                  allKeys: Object.keys(data)
+                });
               }
 
               return baseSkybox;
@@ -966,16 +1043,83 @@ const History = ({ setBackgroundSkybox }) => {
     // Ensure fileUrl is set for skybox preview
     if (!fileUrl && !meshUrl) {
       console.warn('⚠️ Preview: No file URL or mesh URL available for item:', item.id);
-      // Still open preview to show item info
+      console.warn('   Item data:', {
+        id: item.id,
+        title: item.title,
+        source: item.source,
+        hasJobData: !!item.jobData,
+        jobDataKeys: item.jobData ? Object.keys(item.jobData) : [],
+        file_url: item.file_url,
+        imageUrl: item.imageUrl,
+        skyboxUrl: item.skyboxUrl,
+        metadata: item.metadata,
+        allItemKeys: Object.keys(item)
+      });
+      
+      // Try to fetch the latest data from Firestore if this is a skybox
+      if (item.source === 'skyboxes' && item.id) {
+        console.log('🔄 Attempting to fetch latest skybox data from Firestore for:', item.id);
+        const skyboxRef = doc(db, 'skyboxes', item.id);
+        getDoc(skyboxRef).then((docSnap) => {
+          if (docSnap.exists()) {
+            const latestData = docSnap.data();
+            console.log('📥 Latest skybox data from Firestore:', {
+              id: docSnap.id,
+              hasImageUrl: !!latestData.imageUrl,
+              hasImage: !!latestData.image,
+              hasFileUrl: !!latestData.file_url,
+              hasResult: !!latestData.result,
+              hasSkyboxResult: !!latestData.skyboxResult,
+              status: latestData.status,
+              allKeys: Object.keys(latestData)
+            });
+            
+            // If we found a URL in the latest data, update the preview
+            const latestFileUrl = latestData.imageUrl || 
+                                 latestData.image || 
+                                 latestData.file_url || 
+                                 latestData.skyboxUrl ||
+                                 latestData.result?.fileUrl ||
+                                 latestData.result?.downloadUrl ||
+                                 latestData.skyboxResult?.fileUrl;
+            
+            if (latestFileUrl) {
+              console.log('✅ Found file URL in latest data, updating preview:', latestFileUrl);
+              setPreviewType('skybox');
+              setPreviewItem({
+                ...item,
+                file_url: latestFileUrl,
+                imageUrl: latestFileUrl,
+                status: latestData.status || 'completed',
+                jobData: {
+                  ...item.jobData,
+                  skyboxUrl: latestFileUrl,
+                  skyboxResult: latestData.skyboxResult || latestData.result || null
+                }
+              });
+              return;
+            }
+          } else {
+            console.warn('⚠️ Skybox document not found in Firestore:', item.id);
+          }
+        }).catch((err) => {
+          console.error('❌ Error fetching latest skybox data:', err);
+        });
+      }
+      
+      // Still open preview to show item info even if no URL
+      return;
     }
     
     // More comprehensive 3D asset detection
     const hasModelUrls = !!(item.jobData?.model_urls || item.jobData?.meshResult?.model_urls);
+    const hasModelUrlValues = !!(modelUrls?.glb || modelUrls?.fbx || modelUrls?.obj || modelUrls?.usdz);
     const has3DAsset = !!meshUrl || 
                       item.metadata?.hasMesh || 
                       !!item.jobData?.meshUrl ||
                       !!item.jobData?.meshResult ||
-                      hasModelUrls;
+                      hasModelUrls ||
+                      hasModelUrlValues;
     
     // Validate meshUrl is actually a 3D model (not video)
     const isValid3DUrl = meshUrl && !isVideoUrl(meshUrl) && is3DModelUrl(meshUrl);
@@ -1017,7 +1161,6 @@ const History = ({ setBackgroundSkybox }) => {
       });
     } else if (has3DAsset && !isValid3DUrl && hasModelUrls) {
       // Has model_urls but meshUrl might be invalid - extract from model_urls
-      const modelUrls = item.jobData?.model_urls || item.jobData?.meshResult?.model_urls;
       if (modelUrls) {
         const extractedUrl = modelUrls.glb || modelUrls.fbx || modelUrls.obj || modelUrls.usdz;
         const extractedFormat = modelUrls.glb ? 'glb' : modelUrls.fbx ? 'fbx' : modelUrls.obj ? 'obj' : 'usdz';
@@ -1044,13 +1187,44 @@ const History = ({ setBackgroundSkybox }) => {
       setPreviewItem({
         ...item,
         file_url: fileUrl || item.file_url,
-        meshUrl,
+        meshUrl: meshUrl || (modelUrls?.glb || modelUrls?.fbx || modelUrls?.obj || modelUrls?.usdz),
         meshFormat: meshFormat || 'glb',
         jobData: {
           ...item.jobData,
-          meshUrl: meshUrl
+          meshUrl: meshUrl || (modelUrls?.glb || modelUrls?.fbx || modelUrls?.obj || modelUrls?.usdz),
+          model_urls: item.jobData?.model_urls || item.jobData?.meshResult?.model_urls
         }
       });
+    } else if (!fileUrl && has3DAsset) {
+      // No skybox image but has 3D asset - force 3D preview
+      console.log('✅ No skybox image but has 3D asset, forcing 3D preview');
+      const extractedUrl = modelUrls?.glb || modelUrls?.fbx || modelUrls?.obj || modelUrls?.usdz || meshUrl;
+      const extractedFormat = modelUrls?.glb ? 'glb' : modelUrls?.fbx ? 'fbx' : modelUrls?.obj ? 'obj' : modelUrls?.usdz ? 'usdz' : meshFormat || 'glb';
+      
+      if (extractedUrl) {
+        setPreviewType('3d');
+        setPreviewItem({
+          ...item,
+          file_url: null, // No skybox image
+          meshUrl: extractedUrl,
+          meshFormat: extractedFormat,
+          jobData: {
+            ...item.jobData,
+            meshUrl: extractedUrl,
+            model_urls: modelUrls || item.jobData?.model_urls || item.jobData?.meshResult?.model_urls
+          }
+        });
+      } else {
+        // Has 3D asset flag but no URL found - still try to open preview
+        console.warn('⚠️ Has 3D asset flag but no URL found, opening preview anyway');
+        setPreviewType('skybox');
+        setPreviewItem({
+          ...item,
+          file_url: fileUrl || item.file_url,
+          meshUrl: null,
+          meshFormat: null
+        });
+      }
     } else {
       // Fallback to skybox preview - always open preview even if no file_url
       console.log('✅ Opening skybox preview with file_url:', fileUrl || item.file_url);
@@ -1184,22 +1358,21 @@ const History = ({ setBackgroundSkybox }) => {
 
   const formatDate = (timestamp) => {
     if (!timestamp) {
-      console.warn('⚠️ formatDate: No timestamp provided');
       return 'Date unavailable';
     }
     
     try {
-      const date = parseTimestamp(timestamp);
-      
-      // If parseTimestamp returned null, timestamp couldn't be parsed
-      if (!date) {
-        console.warn('⚠️ formatDate: Failed to parse timestamp:', timestamp);
-        return 'Date unavailable';
+      // If it's already a Date object, use it directly
+      let date;
+      if (timestamp instanceof Date) {
+        date = timestamp;
+      } else {
+        // Otherwise, parse it
+        date = parseTimestamp(timestamp);
       }
       
-      // Validate the date is valid
-      if (isNaN(date.getTime())) {
-        console.warn('⚠️ formatDate: Invalid date object:', date);
+      // If date is null or invalid, return unavailable
+      if (!date || isNaN(date.getTime())) {
         return 'Date unavailable';
       }
       
@@ -1215,7 +1388,7 @@ const History = ({ setBackgroundSkybox }) => {
       
       return formatted;
     } catch (err) {
-      console.warn('⚠️ Error formatting date:', err, 'Timestamp:', timestamp);
+      // Silently handle errors - don't spam console
       return 'Date unavailable';
     }
   };

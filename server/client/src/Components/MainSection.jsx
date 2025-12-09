@@ -136,16 +136,10 @@ const MainSection = ({ setBackgroundSkybox }) => {
         });
 
         // Check if it's an emulator connection issue
-        const isLocalhost = typeof window !== 'undefined' && 
-                           (window.location.hostname === 'localhost' || 
-                            window.location.hostname === '127.0.0.1');
         const isEmulatorError = error.message?.includes('emulator') || 
                                error.message?.includes('ERR_CONNECTION_REFUSED') ||
-                               error.message?.includes('Network Error') ||
-                               (isLocalhost && error.code === 'ERR_CONNECTION_REFUSED') ||
-                               (isLocalhost && error.code === 'ERR_NETWORK') ||
-                               (error.config?.baseURL?.includes('localhost:5001') && 
-                                (error.code === 'ERR_CONNECTION_REFUSED' || error.code === 'ERR_NETWORK'));
+                               (error.code === 'ERR_CONNECTION_REFUSED' && 
+                                error.config?.baseURL?.includes('localhost:5001'));
         
         // Only show error toast if it's a critical error (not just empty results)
         const isCriticalError = error.response?.status >= 500 || 

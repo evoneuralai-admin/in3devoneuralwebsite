@@ -177,21 +177,21 @@ app.get('/env-check', (req: Request, res: Response) => {
   
   console.log(`[${requestId}] Environment check requested`);
   
-      res.json({
-      environment: 'production',
-      firebase: true,
-      blockadelabs: !!BLOCKADE_API_KEY,
-      meshy: !!MESHY_API_KEY,
-      razorpay: !!razorpay,
-      env_debug: {
-        blockadelabs_key_length: process.env.BLOCKADE_API_KEY?.length || 0,
-        meshy_key_length: process.env.MESHY_API_KEY?.length || 0,
-        razorpay_key_length: process.env.RAZORPAY_KEY_ID?.length || 0,
-        razorpay_secret_length: process.env.RAZORPAY_KEY_SECRET?.length || 0
-      },
-      timestamp: new Date().toISOString(),
-      requestId
-    });
+  res.json({
+    environment: 'production',
+    firebase: true,
+    blockadelabs: !!BLOCKADE_API_KEY,
+    meshy: !!MESHY_API_KEY,
+    razorpay: !!razorpay,
+    env_debug: {
+      blockadelabs_key_length: process.env.BLOCKADE_API_KEY?.length || 0,
+      meshy_key_length: process.env.MESHY_API_KEY?.length || 0,
+      razorpay_key_length: process.env.RAZORPAY_KEY_ID?.length || 0,
+      razorpay_secret_length: process.env.RAZORPAY_KEY_SECRET?.length || 0
+    },
+    timestamp: new Date().toISOString(),
+    requestId
+  });
 });
 
 // Health check endpoint
@@ -418,60 +418,60 @@ app.post('/skybox/generate', async (req: Request, res: Response) => {
       },
       requestId
     });
-      } catch (error: any) {
-      console.error(`[${requestId}] Error generating skybox:`, error);
+  } catch (error: any) {
+    console.error(`[${requestId}] Error generating skybox:`, error);
+    
+    // Handle specific Blockade Labs API errors
+    if (error.response) {
+      const { status, data } = error.response;
       
-      // Handle specific Blockade Labs API errors
-      if (error.response) {
-        const { status, data } = error.response;
-        
-        if (status === 403) {
-          // Handle quota exceeded or API disabled
-          let errorMessage = 'Generation quota exceeded';
-          if (data && data.error) {
-            if (data.error.includes('used every generation')) {
-              errorMessage = 'API quota has been exhausted. Please contact support or try again later.';
-            } else if (data.error.includes('generations are disabled')) {
-              errorMessage = 'Skybox generation is temporarily disabled. Please try again later.';
-            } else {
-              errorMessage = data.error;
-            }
+      if (status === 403) {
+        // Handle quota exceeded or API disabled
+        let errorMessage = 'Generation quota exceeded';
+        if (data && data.error) {
+          if (data.error.includes('used every generation')) {
+            errorMessage = 'API quota has been exhausted. Please contact support or try again later.';
+          } else if (data.error.includes('generations are disabled')) {
+            errorMessage = 'Skybox generation is temporarily disabled. Please try again later.';
+          } else {
+            errorMessage = data.error;
           }
-          
-          return res.status(403).json({
-            success: false,
-            error: errorMessage,
-            code: 'QUOTA_EXCEEDED',
-            requestId
-          });
         }
         
-        if (status === 400) {
-          return res.status(400).json({
-            success: false,
-            error: data?.error || 'Invalid request parameters',
-            code: 'INVALID_REQUEST',
-            requestId
-          });
-        }
-        
-        if (status === 401) {
-          return res.status(401).json({
-            success: false,
-            error: 'Invalid API key or authentication failed',
-            code: 'AUTH_ERROR',
-            requestId
-          });
-        }
+        return res.status(403).json({
+          success: false,
+          error: errorMessage,
+          code: 'QUOTA_EXCEEDED',
+          requestId
+        });
       }
       
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to generate skybox',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        requestId
-      });
+      if (status === 400) {
+        return res.status(400).json({
+          success: false,
+          error: data?.error || 'Invalid request parameters',
+          code: 'INVALID_REQUEST',
+          requestId
+        });
+      }
+      
+      if (status === 401) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid API key or authentication failed',
+          code: 'AUTH_ERROR',
+          requestId
+        });
+      }
     }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to generate skybox',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
 });
 
 // Skybox Status API
@@ -594,15 +594,15 @@ app.get('/skybox/history', async (req: Request, res: Response) => {
       },
       requestId
     });
-      } catch (error) {
-      console.error(`[${requestId}] Error fetching skybox history:`, error);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to fetch skybox history',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        requestId
-      });
-    }
+  } catch (error) {
+    console.error(`[${requestId}] Error fetching skybox history:`, error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch skybox history',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
 });
 
 // Payment APIs
@@ -651,15 +651,15 @@ app.post('/payment/create-order', async (req: Request, res: Response) => {
       },
       requestId
     });
-      } catch (error) {
-      console.error(`[${requestId}] Error creating payment order:`, error);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to create payment order',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        requestId
-      });
-    }
+  } catch (error) {
+    console.error(`[${requestId}] Error creating payment order:`, error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create payment order',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
 });
 
 app.post('/payment/verify', async (req: Request, res: Response) => {
@@ -712,15 +712,15 @@ app.post('/payment/verify', async (req: Request, res: Response) => {
       },
       requestId
     });
-      } catch (error) {
-      console.error(`[${requestId}] Error verifying payment:`, error);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to verify payment',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        requestId
-      });
-    }
+  } catch (error) {
+    console.error(`[${requestId}] Error verifying payment:`, error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to verify payment',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
 });
 
 // Razorpay Plan Management APIs
@@ -1018,15 +1018,15 @@ app.get('/subscription/:subscriptionId', async (req: Request, res: Response) => 
       data: subscription,
       requestId
     });
-      } catch (error) {
-      console.error(`[${requestId}] Error fetching subscription:`, error);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to fetch subscription',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        requestId
-      });
-    }
+  } catch (error) {
+    console.error(`[${requestId}] Error fetching subscription:`, error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch subscription',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    });
+  }
 });
 
 // ============================================
@@ -1857,12 +1857,15 @@ app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // Export the Express app as a Firebase Function v2
+// Deploy to asia-south1 to match database location
 export const api = onRequest({
   memory: '512MiB',
   timeoutSeconds: 60,
   maxInstances: 10,
   cors: true,
-  region: 'us-central1',
+  region: 'asia-south1',
   invoker: 'public',
-  secrets: ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'BLOCKADE_API_KEY', 'MESHY_API_KEY']
+  // Note: RAZORPAY_WEBHOOK_SECRET is optional - removed from secrets list to allow deployment
+  // If needed, create the secret in Firebase Secret Manager and add it back to this list
+  secrets: ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'BLOCKADE_API_KEY', 'MESHY_API_KEY']
 }, app);
