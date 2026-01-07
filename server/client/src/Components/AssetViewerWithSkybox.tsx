@@ -441,9 +441,9 @@ function ReflectiveGround({
         depthScale={1.2}
         minDepthThreshold={0.4}
         maxDepthThreshold={1.4}
-        color="#050505"
-        metalness={0.5}
-        mirror={0}
+        color="#ffffff"
+        metalness={0.8}
+        mirror={0.3}
         envMap={envMap}
         envMapIntensity={opacity}
       />
@@ -732,6 +732,62 @@ function AssetModel({
       } catch (err) {
         console.error('Model loading failed:', err);
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        
+        // Check if it's a 403 error and the URL is from Meshy
+        if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
+          if (assetUrl.includes('assets.meshy.ai')) {
+            console.log('🔄 Detected 403 error for Meshy URL, attempting to refresh...');
+            try {
+              const { meshyApiService } = await import('../services/meshyApiService');
+              const refreshedUrl = await meshyApiService.refreshMeshyUrl(assetUrl);
+              
+              if (refreshedUrl) {
+                console.log('✅ Got refreshed URL, retrying load...');
+                // Retry with refreshed URL
+                const apiBaseUrl = getApiBaseUrl();
+                const proxyUrl = `${apiBaseUrl}/proxy-asset?url=${encodeURIComponent(refreshedUrl)}`;
+                
+                const loadedGltf = await new Promise<any>((resolve, reject) => {
+                  loaderRef.current!.gltfLoader.load(proxyUrl, resolve, undefined, reject);
+                });
+
+                // Optimize the model for immersive rendering
+                loadedGltf.scene.traverse((child: THREE.Object3D) => {
+                  if (child instanceof THREE.Mesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    if (child.material) {
+                      child.material.needsUpdate = true;
+                      child.material.side = THREE.DoubleSide;
+                      
+                      if (child.material instanceof THREE.MeshStandardMaterial) {
+                        child.material.envMapIntensity = environmentIntensity;
+                      }
+                    }
+                  }
+                });
+
+                // Auto-scale and center
+                const box = new THREE.Box3().setFromObject(loadedGltf.scene);
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 2 / maxDim;
+                loadedGltf.scene.scale.setScalar(scale);
+
+                const center = box.getCenter(new THREE.Vector3());
+                loadedGltf.scene.position.sub(center.multiplyScalar(scale));
+
+                setGltf(loadedGltf);
+                setIsLoading(false);
+                onLoad?.(loadedGltf);
+                return; // Success, exit early
+              }
+            } catch (refreshError) {
+              console.error('❌ Failed to refresh Meshy URL:', refreshError);
+            }
+          }
+        }
+        
         setError(errorMessage);
         setIsLoading(false);
         onError?.(err instanceof Error ? err : new Error(errorMessage));
@@ -917,550 +973,6 @@ function ViewerErrorFallback({ error, assetUrl }: { error: string; assetUrl: str
   );
 }
 
-// Blend settings control panel
-function BlendControlPanel({ 
-  settings, 
-  onSettingsChange,
-  isVisible,
-  onToggle
-}: { 
-  settings: BlendSettings; 
-  onSettingsChange: (settings: BlendSettings) => void;
-  isVisible: boolean;
-  onToggle: () => void;
-}) {
-  const handleChange = useCallback((key: keyof BlendSettings, value: number | boolean | string) => {
-    onSettingsChange({ ...settings, [key]: value });
-  }, [settings, onSettingsChange]);
-
-  return (
-    <>
-      {/* Toggle button */}
-      <button
-        onClick={onToggle}
-        className="absolute top-4 left-4 z-[10001] px-3 py-2 bg-black/80 hover:bg-black/90 text-white rounded-lg text-xs font-semibold border border-white/20 flex items-center gap-2 backdrop-blur-md transition-all"
-        title="Toggle blend settings"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-        </svg>
-        <span className="hidden sm:inline">Blend Settings</span>
-      </button>
-
-      {/* Settings panel */}
-      {isVisible && (
-        <div className="absolute top-16 left-4 z-[10001] bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl p-4 w-72 space-y-4 shadow-2xl">
-          <div className="flex items-center justify-between">
-            <h3 className="text-white font-semibold text-sm tracking-wide">🎨 Blend Settings</h3>
-            <button 
-              onClick={onToggle}
-              className="text-gray-400 hover:text-white transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          
-          {/* Environment Reflection */}
-          <div className="space-y-2">
-            <label className="flex items-center justify-between text-xs text-gray-300">
-              <span>🔮 Reflection Strength</span>
-              <span className="text-emerald-400">{(settings.reflectionStrength * 100).toFixed(0)}%</span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={settings.reflectionStrength}
-              onChange={(e) => handleChange('reflectionStrength', parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-500"
-            />
-          </div>
-
-          {/* Environment Intensity */}
-          <div className="space-y-2">
-            <label className="flex items-center justify-between text-xs text-gray-300">
-              <span>☀️ Environment Light</span>
-              <span className="text-emerald-400">{(settings.environmentIntensity * 100).toFixed(0)}%</span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              value={settings.environmentIntensity}
-              onChange={(e) => handleChange('environmentIntensity', parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-500"
-            />
-          </div>
-
-          {/* Ground Reflection Toggle */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-300">🪞 Ground Reflection</span>
-            <button
-              onClick={() => handleChange('groundReflection', !settings.groundReflection)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.groundReflection ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.groundReflection ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Ground Opacity */}
-          {settings.groundReflection && (
-            <div className="space-y-2 pl-4 border-l-2 border-emerald-500/30">
-              <label className="flex items-center justify-between text-xs text-gray-400">
-                <span>Reflection Opacity</span>
-                <span className="text-emerald-400">{(settings.groundOpacity * 100).toFixed(0)}%</span>
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={settings.groundOpacity}
-                onChange={(e) => handleChange('groundOpacity', parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-              />
-            </div>
-          )}
-
-          {/* Fog Toggle */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-300">🌫️ Atmospheric Fog</span>
-            <button
-              onClick={() => handleChange('fogEnabled', !settings.fogEnabled)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.fogEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.fogEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Fog Density */}
-          {settings.fogEnabled && (
-            <div className="space-y-2 pl-4 border-l-2 border-emerald-500/30">
-              <label className="flex items-center justify-between text-xs text-gray-400">
-                <span>Fog Density</span>
-                <span className="text-emerald-400">{(settings.fogDensity * 1000).toFixed(1)}</span>
-              </label>
-              <input
-                type="range"
-                min="0.001"
-                max="0.05"
-                step="0.001"
-                value={settings.fogDensity}
-                onChange={(e) => handleChange('fogDensity', parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-              />
-            </div>
-          )}
-
-          {/* Float Animation Toggle */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-300">🎈 Float Animation</span>
-            <button
-              onClick={() => handleChange('floatEnabled', !settings.floatEnabled)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.floatEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.floatEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Particles Toggle */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-300">✨ Ambient Particles</span>
-            <button
-              onClick={() => handleChange('particlesEnabled', !settings.particlesEnabled)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.particlesEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.particlesEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Depth Parallax Toggle */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-300">🌊 Depth Parallax</span>
-            <button
-              onClick={() => handleChange('depthParallax', !settings.depthParallax)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.depthParallax ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.depthParallax ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Parallax Intensity */}
-          {settings.depthParallax && (
-            <div className="space-y-2 pl-4 border-l-2 border-emerald-500/30">
-              <label className="flex items-center justify-between text-xs text-gray-400">
-                <span>Parallax Intensity</span>
-                <span className="text-emerald-400">{(settings.parallaxIntensity * 100).toFixed(0)}%</span>
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={settings.parallaxIntensity}
-                onChange={(e) => handleChange('parallaxIntensity', parseFloat(e.target.value))}
-                className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-              />
-            </div>
-          )}
-
-          {/* Wireframe Toggle */}
-          <div className="flex items-center justify-between border-t border-gray-700 pt-3 mt-2">
-            <span className="text-xs text-gray-300">🔲 Wireframe</span>
-            <button
-              onClick={() => handleChange('wireframeEnabled', !settings.wireframeEnabled)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.wireframeEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.wireframeEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Wireframe Settings */}
-          {settings.wireframeEnabled && (
-            <div className="space-y-3 pl-4 border-l-2 border-emerald-500/30">
-              {/* Wireframe Mode */}
-              <div className="space-y-2">
-                <label className="text-xs text-gray-400">Mode</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleChange('wireframeMode', 'overlay')}
-                    className={`flex-1 py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.wireframeMode === 'overlay'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Overlay
-                  </button>
-                  <button
-                    onClick={() => handleChange('wireframeMode', 'full')}
-                    className={`flex-1 py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.wireframeMode === 'full'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Full
-                  </button>
-                </div>
-              </div>
-
-              {/* Wireframe Color */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Color</span>
-                  <input
-                    type="color"
-                    value={settings.wireframeColor}
-                    onChange={(e) => handleChange('wireframeColor', e.target.value)}
-                    className="w-8 h-6 rounded border border-gray-700 cursor-pointer"
-                  />
-                </label>
-              </div>
-
-              {/* Wireframe Opacity */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Opacity</span>
-                  <span className="text-emerald-400">{(settings.wireframeOpacity * 100).toFixed(0)}%</span>
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={settings.wireframeOpacity}
-                  onChange={(e) => handleChange('wireframeOpacity', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-                />
-              </div>
-
-              {/* Wireframe Line Width */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Line Width</span>
-                  <span className="text-emerald-400">{settings.wireframeLineWidth.toFixed(1)}</span>
-                </label>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="3"
-                  step="0.1"
-                  value={settings.wireframeLineWidth}
-                  onChange={(e) => handleChange('wireframeLineWidth', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Skybox Wireframe Toggle */}
-          <div className="flex items-center justify-between border-t border-gray-700 pt-3 mt-2">
-            <span className="text-xs text-gray-300">🌐 Skybox Wireframe</span>
-            <button
-              onClick={() => handleChange('skyboxWireframeEnabled', !settings.skyboxWireframeEnabled)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.skyboxWireframeEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.skyboxWireframeEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* Skybox Wireframe Settings */}
-          {settings.skyboxWireframeEnabled && (
-            <div className="space-y-3 pl-4 border-l-2 border-emerald-500/30">
-              {/* Mesh Density */}
-              <div className="space-y-2">
-                <label className="text-xs text-gray-400">Mesh Density</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleChange('skyboxMeshDensity', 'low')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.skyboxMeshDensity === 'low'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Low
-                  </button>
-                  <button
-                    onClick={() => handleChange('skyboxMeshDensity', 'medium')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.skyboxMeshDensity === 'medium'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Medium
-                  </button>
-                  <button
-                    onClick={() => handleChange('skyboxMeshDensity', 'high')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.skyboxMeshDensity === 'high'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    High
-                  </button>
-                  <button
-                    onClick={() => handleChange('skyboxMeshDensity', 'epic')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.skyboxMeshDensity === 'epic'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Epic
-                  </button>
-                </div>
-              </div>
-
-              {/* Skybox Wireframe Color */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Color</span>
-                  <input
-                    type="color"
-                    value={settings.skyboxWireframeColor}
-                    onChange={(e) => handleChange('skyboxWireframeColor', e.target.value)}
-                    className="w-8 h-6 rounded border border-gray-700 cursor-pointer"
-                  />
-                </label>
-              </div>
-
-              {/* Skybox Wireframe Opacity */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Opacity</span>
-                  <span className="text-emerald-400">{(settings.skyboxWireframeOpacity * 100).toFixed(0)}%</span>
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={settings.skyboxWireframeOpacity}
-                  onChange={(e) => handleChange('skyboxWireframeOpacity', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* World Mesh Toggle */}
-          <div className="flex items-center justify-between border-t border-gray-700 pt-3 mt-2">
-            <span className="text-xs text-gray-300">🌍 World Mesh</span>
-            <button
-              onClick={() => handleChange('worldMeshEnabled', !settings.worldMeshEnabled)}
-              className={`w-10 h-5 rounded-full transition-colors ${
-                settings.worldMeshEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-              }`}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                settings.worldMeshEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
-          </div>
-
-          {/* World Mesh Settings */}
-          {settings.worldMeshEnabled && (
-            <div className="space-y-3 pl-4 border-l-2 border-emerald-500/30">
-              <div className="text-[10px] text-gray-500 italic mb-2">
-                Creates a 3D mesh from your 360° environment using depth information
-              </div>
-              
-              {/* World Mesh Quality */}
-              <div className="space-y-2">
-                <label className="text-xs text-gray-400">Quality</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleChange('worldMeshQuality', 'low')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.worldMeshQuality === 'low'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Low
-                  </button>
-                  <button
-                    onClick={() => handleChange('worldMeshQuality', 'medium')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.worldMeshQuality === 'medium'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Medium
-                  </button>
-                  <button
-                    onClick={() => handleChange('worldMeshQuality', 'high')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.worldMeshQuality === 'high'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    High
-                  </button>
-                  <button
-                    onClick={() => handleChange('worldMeshQuality', 'epic')}
-                    className={`py-1.5 px-2 text-xs rounded transition-colors ${
-                      settings.worldMeshQuality === 'epic'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    Epic
-                  </button>
-                </div>
-              </div>
-
-              {/* Depth Scale */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Depth Scale</span>
-                  <span className="text-emerald-400">{settings.worldMeshDepthScale.toFixed(1)}</span>
-                </label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="5"
-                  step="0.1"
-                  value={settings.worldMeshDepthScale}
-                  onChange={(e) => handleChange('worldMeshDepthScale', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-                />
-              </div>
-
-              {/* Smoothness */}
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Smoothness</span>
-                  <span className="text-emerald-400">{settings.worldMeshSmoothness.toFixed(1)}</span>
-                </label>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="3"
-                  step="0.1"
-                  value={settings.worldMeshSmoothness}
-                  onChange={(e) => handleChange('worldMeshSmoothness', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-full appearance-none cursor-pointer accent-emerald-400"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Reset button */}
-          <button
-            onClick={() => onSettingsChange({
-              reflectionStrength: 0.6,
-              environmentIntensity: 1.2,
-              fogEnabled: false,
-              fogDensity: 0.008,
-              groundReflection: false,
-              groundOpacity: 0.4,
-              floatEnabled: false,
-              particlesEnabled: false,
-              groundFade: true,
-              depthParallax: false,
-              parallaxIntensity: 0.3,
-              wireframeEnabled: false,
-              wireframeMode: 'overlay',
-              wireframeColor: '#00ff88',
-              wireframeOpacity: 0.6,
-              wireframeLineWidth: 1,
-              skyboxWireframeEnabled: false,
-              skyboxMeshDensity: 'medium',
-              skyboxWireframeColor: '#00ff88',
-              skyboxWireframeOpacity: 0.6,
-              worldMeshEnabled: false,
-              worldMeshQuality: 'medium',
-              worldMeshDepthScale: 1.0,
-              worldMeshSmoothness: 1.0
-            })}
-            className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg transition-colors border border-gray-700"
-          >
-            Reset to Defaults
-          </button>
-        </div>
-      )}
-    </>
-  );
-}
 
 // Main component
 export const AssetViewerWithSkybox: React.FC<AssetViewerWithSkyboxProps> = ({
@@ -1475,8 +987,7 @@ export const AssetViewerWithSkybox: React.FC<AssetViewerWithSkyboxProps> = ({
 }) => {
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [envTexture, setEnvTexture] = useState<THREE.Texture | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [blendSettings, setBlendSettings] = useState<BlendSettings>({
+  const [blendSettings] = useState<BlendSettings>({
     reflectionStrength: 0.6,
     environmentIntensity: 1.2,
     fogEnabled: false,
@@ -1543,25 +1054,8 @@ export const AssetViewerWithSkybox: React.FC<AssetViewerWithSkyboxProps> = ({
   }
   
   return (
-    <div className={`relative w-full h-full min-h-[400px] ${className}`}>
-      {/* Blend settings control panel */}
-      <BlendControlPanel
-        settings={blendSettings}
-        onSettingsChange={setBlendSettings}
-        isVisible={showSettings}
-        onToggle={() => setShowSettings(!showSettings)}
-      />
+    <div className={`relative w-full h-full min-h-[400px] ${className} transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]`}>
 
-      {/* Info overlay */}
-      <div className="absolute bottom-4 left-4 z-[10000] bg-black/70 backdrop-blur-md rounded-lg px-3 py-2 text-[10px] text-gray-400 border border-white/10">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>Immersive 3D View</span>
-        </div>
-        <div className="text-[9px] mt-1 opacity-70">
-          Drag to orbit • Scroll to zoom • Right-click to pan
-        </div>
-      </div>
 
       <Canvas
         camera={{ 
@@ -1607,7 +1101,7 @@ export const AssetViewerWithSkybox: React.FC<AssetViewerWithSkyboxProps> = ({
             <>
               <mesh>
                 <sphereGeometry args={[500, MESH_DENSITY_PRESETS[blendSettings.skyboxMeshDensity][0], MESH_DENSITY_PRESETS[blendSettings.skyboxMeshDensity][0]]} />
-                <meshBasicMaterial color="#050505" side={THREE.BackSide} />
+                <meshBasicMaterial color="transparent" side={THREE.BackSide} transparent />
               </mesh>
               {blendSettings.skyboxWireframeEnabled && (
                 <SkyboxWireframe
@@ -1657,16 +1151,6 @@ export const AssetViewerWithSkybox: React.FC<AssetViewerWithSkyboxProps> = ({
             fade={blendSettings.groundFade}
           />
 
-          {/* Contact shadows for grounding */}
-          <ContactShadows
-            position={[0, -1.99, 0]}
-            opacity={0.5}
-            scale={20}
-            blur={2.5}
-            far={10}
-            resolution={1024}
-            color="#000000"
-          />
 
           {/* Ambient particles */}
           <AmbientParticles enabled={blendSettings.particlesEnabled} />
