@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// DEVELOPMENT STORAGE RULES - VERY PERMISSIVE FOR TESTING
+// WARNING: These rules are for development only. DO NOT use in production!
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow all read and write operations for development
+    match /{allPaths=**} {
+      allow read, write: if true;
+    }
+  }
+} 
